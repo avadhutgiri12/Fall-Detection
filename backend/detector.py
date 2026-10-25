@@ -45,11 +45,13 @@ class FallDetector:
         conf_threshold: float = 0.6,
         sender_email: str = "avadhutgiri143@gmail.com",
         sender_pass: str = "svvp omtr jzhl jdzc",
+        target_email: str = "your-email@example.com",
     ):
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.sender_email = sender_email
         self.sender_pass = sender_pass
+        self.target_email = target_email
         self._model: Optional[YOLO] = None
         self._last_alert_time = 0.0
         self._alert_lock = threading.Lock()
@@ -114,13 +116,13 @@ class FallDetector:
                 if self._send_alert(score):
                     self._last_alert_time = now
 
-    def _send_alert(self, score: float, target_email: str = "your-email@example.com") -> bool:
+    def _send_alert(self, score: float) -> bool:
         """Send fall alert email."""
         try:
             msg = EmailMessage()
-            msg['Subject'] = "🚨 FALL ALERT: Room 101"
+            msg['Subject'] = "Fall Detected ⚠️🚨"
             msg['From'] = self.sender_email
-            msg['To'] = target_email
+            msg['To'] = self.target_email
             msg.set_content(f"System detected a fall with {score:.2%} confidence. Immediate check required.")
 
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
@@ -129,6 +131,10 @@ class FallDetector:
             return True
         except Exception:
             return False
+
+    def set_target_email(self, email: str):
+        """Update target email for alerts."""
+        self.target_email = email
 
     def draw_detections(self, frame: np.ndarray, result: DetectionResult) -> np.ndarray:
         """Draw bounding boxes and labels on frame."""

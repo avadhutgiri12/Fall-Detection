@@ -368,6 +368,7 @@ async def get_config():
 
     return {
         "conf_threshold": detector.conf_threshold,
+        "target_email": detector.target_email,
         "model_path": detector.model_path
     }
 
@@ -381,11 +382,12 @@ async def update_config(request: ConfigUpdateRequest):
     if request.conf_threshold is not None:
         detector.set_conf_threshold(request.conf_threshold)
 
-    # Note: target_email would need to be stored in detector for alerts
-    # For now, we'll just acknowledge
+    if request.target_email is not None:
+        detector.set_target_email(request.target_email)
 
     return {
         "conf_threshold": detector.conf_threshold,
+        "target_email": detector.target_email,
         "message": "Configuration updated"
     }
 

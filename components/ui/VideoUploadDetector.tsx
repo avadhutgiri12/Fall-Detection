@@ -20,7 +20,7 @@ interface VideoJob {
   download_url?: string;
 }
 
-interface VideoUploadDetectorProps {
+export interface VideoUploadDetectorProps {
   /** REST API base URL */
   apiUrl?: string;
   /** Initial confidence threshold */

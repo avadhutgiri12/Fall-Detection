@@ -23,3 +23,14 @@ export type { WebcamDetectorProps } from "./WebcamDetector";
 
 export { VideoUploadDetector } from "./VideoUploadDetector";
 export type { VideoUploadDetectorProps } from "./VideoUploadDetector";
+
+// Hooks
+export { useFallDetection } from "../hooks/useFallDetection";
+export type { UseFallDetectionReturn, UseFallDetectionOptions } from "../hooks/useFallDetection";
+
+export { useCamera } from "../hooks/useCamera";
+export type { UseCameraReturn, UseCameraOptions } from "../hooks/useCamera";
+
+// Buttons
+export { CanvasButton } from "./CanvasButton";
+export type { CanvasButtonProps } from "./CanvasButton";
