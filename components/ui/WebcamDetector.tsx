@@ -191,7 +191,8 @@ export function WebcamDetector({
   // Keep reconnect callbacks pointed at the latest WebSocket handler.
   connectWebSocketRef.current = connectWebSocket;
 
-  const startCamera = useCallback(async (mode: "user" | "environment" = facingMode) => {
+  const startCamera = useCallback(async (mode?: "user" | "environment") => {
+    const effectiveMode = mode ?? facingMode;
     setError(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -207,7 +208,7 @@ export function WebcamDetector({
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: { ideal: effectiveMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
 
@@ -219,7 +220,7 @@ export function WebcamDetector({
 
       video.srcObject = stream;
       await video.play();
-      setFacingMode(mode);
+      setFacingMode(effectiveMode);
       setIsCameraOn(true);
     } catch (err) {
       console.error("[WebcamDetector] Camera error:", err);
@@ -397,6 +398,27 @@ export function WebcamDetector({
       }, 250);
     }
   }, [facingMode, isCameraOn, startCamera, stopDetection]);
+
+  // Click handler wrappers for onClick events (ignore MouseEvent parameter)
+  const handleStartCameraClick = useCallback(() => {
+    void startCamera();
+  }, [startCamera]);
+
+  const handleStopCameraClick = useCallback(() => {
+    void stopCamera();
+  }, [stopCamera]);
+
+  const handleStartDetectionClick = useCallback(() => {
+    void startDetection();
+  }, [startDetection]);
+
+  const handleStopDetectionClick = useCallback(() => {
+    void stopDetection();
+  }, [stopDetection]);
+
+  const handleToggleCameraClick = useCallback(() => {
+    void toggleCamera();
+  }, [toggleCamera]);
 
   const handleConfChange = useCallback((value: number) => {
     setConfThreshold(value);
@@ -610,7 +632,7 @@ export function WebcamDetector({
               <p className="text-gray-400 max-w-md mx-auto mb-6">
                 Click "Start Camera" to activate your webcam. Then click "Start Detection" to begin real-time fall detection using AI.
               </p>
-              <Button variant="fancy" size="lg" onClick={startCamera} disabled={isCameraOn}>
+              <Button variant="fancy" size="lg" onClick={handleStartCameraClick} disabled={isCameraOn}>
                 Start Camera
               </Button>
             </div>
