@@ -166,7 +166,7 @@ export function Canvas() {
             role="tab"
             aria-selected={activeTab === "features"}
             onClick={() => setActiveTab("features")}
-            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer ${
               activeTab === "features"
                 ? "bg-primary text-primary-foreground shadow-lg"
                 : "bg-background text-muted-foreground hover:text-foreground hover:bg-primary/5"
@@ -178,7 +178,7 @@ export function Canvas() {
             role="tab"
             aria-selected={activeTab === "webcam"}
             onClick={() => setActiveTab("webcam")}
-            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer ${
               activeTab === "webcam"
                 ? "bg-primary text-primary-foreground shadow-lg"
                 : "bg-background text-muted-foreground hover:text-foreground hover:bg-primary/5"
@@ -196,7 +196,7 @@ export function Canvas() {
             role="tab"
             aria-selected={activeTab === "upload"}
             onClick={() => setActiveTab("upload")}
-            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer ${
               activeTab === "upload"
                 ? "bg-primary text-primary-foreground shadow-lg"
                 : "bg-background text-muted-foreground hover:text-foreground hover:bg-primary/5"
