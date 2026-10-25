@@ -17,3 +17,9 @@ export { SectionWrapper, SectionHeader } from "./Section";
 export type { SectionWrapperProps, SectionHeaderProps } from "./Section";
 
 export { Navbar } from "./Navbar";
+
+export { WebcamDetector } from "./WebcamDetector";
+export type { WebcamDetectorProps } from "./WebcamDetector";
+
+export { VideoUploadDetector } from "./VideoUploadDetector";
+export type { VideoUploadDetectorProps } from "./VideoUploadDetector";

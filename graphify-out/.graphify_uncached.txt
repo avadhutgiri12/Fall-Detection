@@ -1,0 +1,9 @@
+D:\Study\Projects\Fall detection System\falldetection\AGENTS.md
+D:\Study\Projects\Fall detection System\falldetection\CLAUDE.md
+D:\Study\Projects\Fall detection System\falldetection\README.md
+D:\Study\Projects\Fall detection System\falldetection\backend\requirements.txt
+D:\Study\Projects\Fall detection System\falldetection\public\file.svg
+D:\Study\Projects\Fall detection System\falldetection\public\globe.svg
+D:\Study\Projects\Fall detection System\falldetection\public\next.svg
+D:\Study\Projects\Fall detection System\falldetection\public\vercel.svg
+D:\Study\Projects\Fall detection System\falldetection\public\window.svg

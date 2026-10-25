@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Card, CardContent } from "./ui/Card";
 import { Button } from "./ui/Button";
 import { SectionWrapper, SectionHeader } from "./ui/Section";
 import { Container } from "./ui/Container";
+import { WebcamDetector } from "./ui/WebcamDetector";
+import { VideoUploadDetector } from "./ui/VideoUploadDetector";
 import { canvasContent } from "../data/content";
 
 gsap.registerPlugin(ScrollTrigger);
@@ -55,7 +57,7 @@ function DemoIcon({ name, className = "" }: DemoIconProps) {
 
 export function Canvas() {
   const sectionRef = useRef<HTMLElement>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
+  const [activeTab, setActiveTab] = useState<"webcam" | "upload" | "features">("features");
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -122,7 +124,7 @@ export function Canvas() {
       }
 
       // Floating animation for canvas area
-      const canvasArea = canvasRef.current;
+      const canvasArea = section.querySelector(".canvas-area");
       if (canvasArea) {
         gsap.to(canvasArea, {
           y: -15,
@@ -136,6 +138,11 @@ export function Canvas() {
 
     return () => ctx.revert();
   }, []);
+
+  const handleFallDetected = (score: number) => {
+    // Could show a toast notification here
+    console.log("[Canvas] Fall detected with score:", score);
+  };
 
   return (
     <SectionWrapper
@@ -151,12 +158,12 @@ export function Canvas() {
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-secondary/20 rounded-full blur-3xl translate-x-1/2 -translate-y-1/2" />
         {/* Grid pattern overlay */}
         <div className="absolute inset-0 opacity-5" style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z' fill='%232D6A4F' fill-opacity='0.03'/%3E%3C/g%3E%3C/svg%3E")`,
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z' fill='%232D6A4F' fill-opacity='0.03'/%3E%3C/g%3E%3C/svg%3E")`,
         }} />
       </div>
 
       <div className="relative z-10">
-        <div className="max-w-3xl mx-auto text-center mb-16">
+        <div className="max-w-3xl mx-auto text-center mb-12">
           <SectionHeader
             className="section-header"
             title={canvasContent.title}
@@ -165,80 +172,165 @@ export function Canvas() {
           />
         </div>
 
-        {/* Interactive Canvas Area */}
-        <div ref={canvasRef} className="relative mb-16" aria-hidden="true">
-          <div className="aspect-video max-w-4xl mx-auto rounded-2xl overflow-hidden border border-border bg-gradient-to-br from-primary/5 via-background to-secondary/5">
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center p-8">
-                <div className="w-24 h-24 mx-auto mb-6 rounded-2xl bg-primary/10 flex items-center justify-center">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" aria-hidden="true">
-                    <rect x="2" y="2" width="20" height="20" rx="2" />
-                    <path d="M8 12l4 4 8-8" />
-                    <circle cx="12" cy="12" r="8" strokeDasharray="32" strokeDashoffset="32">
-                      <animate attributeName="strokeDashoffset" from="32" to="0" dur="2s" repeatCount="indefinite" />
-                    </circle>
-                  </svg>
+        {/* Tab Navigation */}
+        <div className="flex justify-center gap-2 mb-8" role="tablist" aria-label="Demo modes">
+          <button
+            role="tab"
+            aria-selected={activeTab === "features"}
+            onClick={() => setActiveTab("features")}
+            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+              activeTab === "features"
+                ? "bg-primary text-primary-foreground shadow-lg"
+                : "bg-background text-muted-foreground hover:text-foreground hover:bg-primary/5"
+            }`}
+          >
+            Overview
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === "webcam"}
+            onClick={() => setActiveTab("webcam")}
+            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+              activeTab === "webcam"
+                ? "bg-primary text-primary-foreground shadow-lg"
+                : "bg-background text-muted-foreground hover:text-foreground hover:bg-primary/5"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+              Live Camera
+            </span>
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === "upload"}
+            onClick={() => setActiveTab("upload")}
+            className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+              activeTab === "upload"
+                ? "bg-primary text-primary-foreground shadow-lg"
+                : "bg-background text-muted-foreground hover:text-foreground hover:bg-primary/5"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              Video Upload
+            </span>
+          </button>
+        </div>
+
+        {/* Tab Panels */}
+        <div className="canvas-area">
+          {/* Features Overview Tab */}
+          {activeTab === "features" && (
+            <div role="tabpanel" aria-label="Features overview">
+              {/* Interactive Canvas Area Placeholder */}
+              <div className="relative mb-16" aria-hidden="true">
+                <div className="aspect-video max-w-4xl mx-auto rounded-2xl overflow-hidden border border-border bg-gradient-to-br from-primary/5 via-background to-secondary/5">
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="text-center p-8">
+                      <div className="w-24 h-24 mx-auto mb-6 rounded-2xl bg-primary/10 flex items-center justify-center">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" aria-hidden="true">
+                          <rect x="2" y="2" width="20" height="20" rx="2" />
+                          <path d="M8 12l4 4 8-8" />
+                          <circle cx="12" cy="12" r="8" strokeDasharray="32" strokeDashoffset="32">
+                            <animate attributeName="strokeDashoffset" from="32" to="0" dur="2s" repeatCount="indefinite" />
+                          </circle>
+                        </svg>
+                      </div>
+                      <h3 className="text-lg font-semibold text-foreground mb-2">Interactive Demos</h3>
+                      <p className="text-muted-foreground max-w-md mx-auto">
+                        Select "Live Camera" or "Video Upload" tabs above to experience real-time fall detection powered by YOLOv8 pose estimation.
+                      </p>
+                    </div>
+                  </div>
+                  {/* Corner accents */}
+                  <div className="absolute top-4 left-4 w-16 h-16 border-2 border-primary/20 rounded-t-xl border-b-0 border-r-0" />
+                  <div className="absolute top-4 right-4 w-16 h-16 border-2 border-primary/20 rounded-tr-xl border-b-0 border-l-0" />
+                  <div className="absolute bottom-4 left-4 w-16 h-16 border-2 border-primary/20 rounded-bl-xl border-t-0 border-r-0" />
+                  <div className="absolute bottom-4 right-4 w-16 h-16 border-2 border-primary/20 rounded-br-xl border-t-0 border-l-0" />
                 </div>
-                <h3 className="text-lg font-semibold text-foreground mb-2">Live Demo Preview</h3>
-                <p className="text-muted-foreground max-w-md mx-auto">Interactive visualizations coming soon. This area will showcase real-time AI detection, movement heatmaps, and alert timelines.</p>
+              </div>
+
+              {/* Feature Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
+                {canvasContent.features.map((feature, index) => (
+                  <Card
+                    key={feature.title}
+                    className="demo-card group"
+                    padding="lg"
+                    hover
+                  >
+                    <CardContent className="text-center">
+                      <DemoIcon name={feature.icon} className="mx-auto mb-4 group-hover:scale-110 transition-transform duration-300" />
+                      <h3 className="text-lg font-semibold text-foreground mb-2">
+                        {feature.title}
+                      </h3>
+                      <p className="text-muted-foreground text-sm mb-4">
+                        {feature.description}
+                      </p>
+                      <span className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-hover transition-colors">
+                        Explore Demo
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                      </span>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* CTA Buttons */}
+              <div className="canvas-cta flex flex-col sm:flex-row gap-4 justify-center">
+                <Button variant="fancy" size="lg" onClick={() => setActiveTab("webcam")}>
+                  {canvasContent.cta.primary}
+                </Button>
+                <Button variant="outline" size="lg" onClick={() => setActiveTab("upload")}>
+                  {canvasContent.cta.secondary}
+                </Button>
               </div>
             </div>
-            {/* Corner accents */}
-            <div className="absolute top-4 left-4 w-16 h-16 border-2 border-primary/20 rounded-t-xl border-b-0 border-r-0" />
-            <div className="absolute top-4 right-4 w-16 h-16 border-2 border-primary/20 rounded-tr-xl border-b-0 border-l-0" />
-            <div className="absolute bottom-4 left-4 w-16 h-16 border-2 border-primary/20 rounded-bl-xl border-t-0 border-r-0" />
-            <div className="absolute bottom-4 right-4 w-16 h-16 border-2 border-primary/20 rounded-br-xl border-t-0 border-l-0" />
-          </div>
+          )}
+
+          {/* Live Webcam Tab */}
+          {activeTab === "webcam" && (
+            <div role="tabpanel" aria-label="Live camera detection">
+              <WebcamDetector
+                wsUrl="ws://localhost:8000/ws/detect"
+                apiUrl="http://localhost:8000"
+                initialConfThreshold={0.6}
+                onFallDetected={handleFallDetected}
+              />
+            </div>
+          )}
+
+          {/* Video Upload Tab */}
+          {activeTab === "upload" && (
+            <div role="tabpanel" aria-label="Video upload analysis">
+              <VideoUploadDetector
+                apiUrl="http://localhost:8000"
+                initialConfThreshold={0.6}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Feature Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-          {canvasContent.features.map((feature, index) => (
-            <Card
-              key={feature.title}
-              className="demo-card group"
-              padding="lg"
-              hover
-            >
-              <CardContent className="text-center">
-                <DemoIcon name={feature.icon} className="mx-auto mb-4 group-hover:scale-110 transition-transform duration-300" />
-                <h3 className="text-lg font-semibold text-foreground mb-2">
-                  {feature.title}
-                </h3>
-                <p className="text-muted-foreground text-sm mb-4">
-                  {feature.description}
-                </p>
-                <span className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-hover transition-colors">
-                  Explore Demo
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                    <path d="M5 12h14M12 5l7 7-7 7" />
-                  </svg>
-                </span>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        {/* CTA Buttons */}
-        <div className="canvas-cta flex flex-col sm:flex-row gap-4 justify-center">
-          <Button variant="fancy" size="lg">
-            {canvasContent.cta.primary}
-          </Button>
-          <Button variant="outline" size="lg">
-            {canvasContent.cta.secondary}
-          </Button>
-        </div>
+        <style jsx>{`
+          @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+          }
+          .animate-float {
+            animation: float 4s ease-in-out infinite;
+          }
+        `}</style>
       </div>
-
-      <style jsx>{`
-        @keyframes float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
-        .animate-float {
-          animation: float 4s ease-in-out infinite;
-        }
-      `}</style>
     </SectionWrapper>
   );
 }
