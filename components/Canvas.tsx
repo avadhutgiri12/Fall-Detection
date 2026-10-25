@@ -122,18 +122,6 @@ export function Canvas() {
           }
         );
       }
-
-      // Floating animation for canvas area
-      const canvasArea = section.querySelector(".canvas-area");
-      if (canvasArea) {
-        gsap.to(canvasArea, {
-          y: -15,
-          duration: 4,
-          ease: "sine.inOut",
-          yoyo: true,
-          repeat: -1,
-        });
-      }
     }, sectionRef);
 
     return () => ctx.revert();
