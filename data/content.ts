@@ -1,93 +1,94 @@
 // Fall Detection Application - Content Data
 // All text content, titles, descriptions for the application
+// Updated for Camera-based Fall Detection with YOLOv8 Pose Estimation
 
 export const heroContent = {
-  headline: "Advanced Fall Detection for Safer Living",
-  subheadline: "AI-powered monitoring system that detects falls in real-time and alerts caregivers instantly. Peace of mind for families, independence for seniors.",
-  ctaPrimary: "Try it yourself",
-  ctaSecondary: "Learn More",
+  headline: "CareSight AI",
+  subheadline: "Turn any webcam into an intelligent fall detection system. Powered by YOLOv8 pose estimation for instant, accurate fall alerts.",
+  ctaPrimary: "Try Live Demo",
+  ctaSecondary: "View Video Analysis",
   trustIndicators: [
-    "99.2% Detection Accuracy",
-    "< 3 Second Response Time",
-    "HIPAA Compliant",
-    "FDA Cleared"
+    "YOLOv8 Pose Estimation",
+    "< 100ms Inference",
+    "Privacy-First Local Processing",
+    "Open Source Model"
   ]
 };
 
 export const aboutContent = {
-  title: "Why Choose FallGuard?",
-  description: "FallGuard combines cutting-edge AI technology with compassionate care to create the most reliable fall detection system on the market.",
+  title: "Why Choose Camera-Based Fall Detection?",
+  description: "Our system transforms any webcam into a powerful fall detection tool using state-of-the-art YOLOv8 pose estimation. No wearables, no sensors—just your camera and AI.",
   features: [
     {
+      icon: "cpu",
+      title: "Real-Time Camera Monitoring",
+      description: "Live webcam feed analysis with YOLOv8 pose estimation for instant fall detection at 10+ FPS."
+    },
+    {
+      icon: "bell",
+      title: "Instant Fall Alerts",
+      description: "Email notifications with confidence scores sent immediately when a fall is detected."
+    },
+    {
+      icon: "sliders",
+      title: "Adjustable Sensitivity",
+      description: "Configurable confidence threshold (0-1) to balance sensitivity vs. false positives."
+    },
+    {
       icon: "shield",
-      title: "Real-Time Monitoring",
-      description: "24/7 continuous monitoring with edge AI processing for instant fall detection without cloud latency."
+      title: "Privacy-First Processing",
+      description: "No video storage, only skeletal pose estimation. All processing on your server."
     },
     {
-      icon: "users",
-      title: "Caregiver Alerts",
-      description: "Instant notifications via SMS, email, and app push notifications to multiple caregivers simultaneously."
+      icon: "file-video",
+      title: "Video Upload Analysis",
+      description: "Upload recorded videos for batch fall detection analysis with annotated output video."
     },
     {
-      icon: "chart-bar",
-      title: "Health Analytics",
-      description: "Comprehensive dashboards tracking mobility patterns, fall risk trends, and activity levels over time."
-    },
-    {
-      icon: "lock",
-      title: "Privacy First",
-      description: "End-to-end encryption with local processing option. No video recording, only skeletal pose estimation."
-    },
-    {
-      icon: "wifi",
-      title: "Easy Setup",
-      description: "Plug-and-play sensors with automatic calibration. No technical expertise required for installation."
-    },
-    {
-      icon: "battery",
-      title: "Long Battery Life",
-      description: "Up to 12 months battery life on sensors with low-battery alerts sent weeks in advance."
+      icon: "globe",
+      title: "Easy Web Deployment",
+      description: "Run locally or deploy anywhere. Just a webcam and Python FastAPI backend required."
     }
   ]
 };
 
 export const howItWorksContent = {
-  title: "How It Works",
-  subtitle: "Simple setup, powerful protection in three easy steps",
+  title: "How to Use the Fall Detection App",
+  subtitle: "Get started in three simple steps—no installation required, works in your browser",
   steps: [
     {
       number: "01",
-      title: "Install Sensors",
-      description: "Place discrete sensors in key areas - bedroom, bathroom, living room. No cameras, no wearables required.",
-      image: "/images/step1-install.svg"
+      title: "Open Canvas & Choose Mode",
+      description: "Navigate to the Canvas page and select Live Camera for real-time webcam detection or Video Upload to analyze a recorded video.",
+      image: "/images/step1-canvas.svg"
     },
     {
       number: "02",
-      title: "AI Learns Patterns",
-      description: "Our AI builds a personalized movement baseline for each user, learning normal activities vs. fall patterns.",
-      image: "/images/step2-learn.svg"
+      title: "Configure & Start Detection",
+      description: "For Live Camera: Click Start Camera, wait for preview, enter alert email (optional), then click Start Detection. For Video Upload: Drag & drop a video file, set confidence threshold, then click Upload & Analyze.",
+      image: "/images/step2-configure.svg"
     },
     {
       number: "03",
-      title: "Instant Alerts",
-      description: "When a fall is detected, caregivers receive immediate alerts with location, time, and severity assessment.",
-      image: "/images/step3-alert.svg"
+      title: "Monitor Results & Get Alerts",
+      description: "Watch real-time pose estimation with bounding boxes. Falls are highlighted in red. Email alerts sent automatically when falls are detected.",
+      image: "/images/step3-monitor.svg"
     }
   ]
 };
 
 export const contactContent = {
   title: "Get in Touch",
-  subtitle: "Ready to protect your loved ones? Contact our team for a personalized consultation.",
+  subtitle: "Have questions about the fall detection system? Reach out to our team for support or collaboration inquiries.",
   form: {
     nameLabel: "Full Name",
     namePlaceholder: "John Doe",
     emailLabel: "Email Address",
     emailPlaceholder: "john@example.com",
-    phoneLabel: "Phone Number",
+    phoneLabel: "Phone Number (Optional)",
     phonePlaceholder: "+1 (555) 000-0000",
     messageLabel: "Message",
-    messagePlaceholder: "Tell us about your needs...",
+    messagePlaceholder: "Tell us about your use case or ask a question...",
     submitButton: "Send Message",
     successMessage: "Thank you! We'll be in touch within 24 hours.",
     errorMessage: "Something went wrong. Please try again."
@@ -96,68 +97,67 @@ export const contactContent = {
     {
       icon: "mail",
       label: "Email",
-      value: "support@fallguard.com",
-      link: "mailto:support@fallguard.com"
+      value: "avadhutgiri143@gmail.com",
+      link: "mailto:support@falldetection.ai"
     },
     {
-      icon: "phone",
-      label: "Phone",
-      value: "+1 (800) 555-0199",
-      link: "tel:+18005550199"
+      icon: "github",
+      label: "GitHub",
+      value: "github.com/falldetection",
+      link: "https://github.com/avadhutgiri12/Fall-Detection"
     },
     {
-      icon: "map-pin",
-      label: "Address",
-      value: "123 Health Tech Ave, San Francisco, CA 94105",
-      link: "https://maps.google.com"
+      icon: "mail",
+      label: "Issues & Bug Reports",
+      value: "GitHub Issues",
+      link: "https://github.com/avadhutgiri12/fall-detection/issues"
     },
     {
-      icon: "clock",
-      label: "Hours",
-      value: "Mon-Fri 9am-6pm EST",
-      link: null
+      icon: "book",
+      label: "Documentation",
+      value: "API Docs & Guides",
+      link: "https://github.com/falldetection/docs"
     }
   ]
 };
 
 export const footerContent = {
-  companyName: "FallGuard",
-  tagline: "Protecting independence through innovation",
+  companyName: "CareSight AI",
+  tagline: "Camera-based fall detection powered by YOLOv8",
   navigation: {
     product: [
-      { label: "Features", href: "#features" },
-      { label: "Pricing", href: "#pricing" },
-      { label: "How It Works", href: "#how-it-works" },
-      { label: "FAQ", href: "#faq" }
+      { label: "Live Demo", href: "/canvas" },
+      { label: "Video Analysis", href: "/canvas" },
+      { label: "How It Works", href: "/how-it-works" },
+      { label: "Documentation", href: "https://github.com/falldetection/docs" }
     ],
     company: [
-      { label: "About Us", href: "#about" },
-      { label: "Careers", href: "#careers" },
-      { label: "Blog", href: "#blog" },
-      { label: "Press", href: "#press" }
+      { label: "About", href: "/about" },
+      { label: "Technology", href: "/about" },
+      { label: "Privacy", href: "/contact" },
+      { label: "Open Source", href: "https://github.com/avadhutgiri12/Fall-Detection" }
     ],
     support: [
-      { label: "Help Center", href: "#help" },
-      { label: "Contact", href: "#contact" },
-      { label: "Privacy Policy", href: "#privacy" },
-      { label: "Terms of Service", href: "#terms" }
+      { label: "Help Center", href: "https://github.com/avadhutgiri12/fall-detection/issues" },
+      { label: "Contact", href: "/contact" },
+      { label: "API Reference", href: "https://github.com/falldetection/docs" },
+      { label: "Community", href: "https://github.com/avadhutgiri12/Fall-Detection" }
     ]
   },
   socialLinks: [
-    { platform: "twitter", href: "https://twitter.com/fallguard", label: "Twitter" },
-    { platform: "linkedin", href: "https://linkedin.com/company/fallguard", label: "LinkedIn" },
-    { platform: "facebook", href: "https://facebook.com/fallguard", label: "Facebook" },
-    { platform: "instagram", href: "https://instagram.com/fallguard", label: "Instagram" }
+    { platform: "github", href: "https://github.com/falldetection", label: "GitHub" },
+    { platform: "twitter", href: "https://twitter.com/falldetection", label: "Twitter" },
+    { platform: "linkedin", href: "https://linkedin.com/company/falldetection", label: "LinkedIn" }
   ],
-  copyright: "© 2025 FallGuard. All rights reserved."
+  copyright: "© 2025 Avadhut Giri."
 };
 
 export const uiContent = {
   button: {
     primary: "Get Started",
     secondary: "Learn More",
-    outline: "Contact Sales",
-    loading: "Please wait...",
+    outline: "View Docs",
+    loading: "Processing...",
     submit: "Submit"
   },
   card: {
@@ -172,36 +172,36 @@ export const uiContent = {
 };
 
 export const canvasContent = {
-  title: "Interactive Canvas",
-  subtitle: "Explore FallGuard's technology through interactive visualizations and real-time demonstrations",
+  title: "Live Camera & Video Analysis",
+  subtitle: "Experience real-time fall detection with your webcam or analyze recorded videos with YOLOv8 pose estimation",
   features: [
     {
       icon: "cpu",
-      title: "AI Detection Engine",
-      description: "Watch our neural network process movement data in real-time, distinguishing falls from daily activities with 99.2% accuracy.",
-      demoType: "neural-network"
+      title: "Live Camera Detection",
+      description: "Real-time webcam fall detection with pose estimation overlay. Adjust confidence threshold and get instant email alerts.",
+      demoType: "webcam"
+    },
+    {
+      icon: "file-video",
+      title: "Video Upload Analysis",
+      description: "Upload MP4, MOV, AVI, or MKV videos for batch fall detection. Download annotated video with detection boxes.",
+      demoType: "upload"
     },
     {
       icon: "activity",
-      title: "Movement Heatmap",
-      description: "Visualize daily activity patterns and fall risk zones throughout the home with interactive 3D mapping.",
-      demoType: "heatmap"
+      title: "Pose Visualization",
+      description: "See skeletal keypoints and bounding boxes in real-time. Green for normal posture, red for detected falls.",
+      demoType: "pose"
     },
     {
-      icon: "zap",
-      title: "Alert Response Timeline",
-      description: "Experience the sub-3-second journey from fall detection to caregiver notification across multiple channels.",
-      demoType: "timeline"
-    },
-    {
-      icon: "shield-check",
-      title: "Privacy Architecture",
-      description: "Explore our edge-computing architecture that processes all data locally - no video leaves the device.",
-      demoType: "privacy"
+      icon: "sliders",
+      title: "Confidence Tuning",
+      description: "Fine-tune detection sensitivity with the confidence threshold slider (0.0-1.0) to match your environment.",
+      demoType: "tuning"
     }
   ],
   cta: {
-    primary: "Launch Live Demo",
-    secondary: "View Documentation"
+    primary: "Start Live Detection",
+    secondary: "Upload Video"
   }
 };

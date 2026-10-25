@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Link from "next/link";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Button } from "./ui/Button";
@@ -63,7 +64,7 @@ export function Hero() {
   return (
     <section
       ref={heroRef}
-      className="relative min-h-screen flex items-center justify-center overflow-hidden"
+      className="relative min-h-screen flex items-center justify-center overflow-hidden pt-20 md:pt-24 lg:pt-0"
       aria-labelledby="hero-headline"
     >
       {/* Background pattern */}
@@ -73,7 +74,7 @@ export function Hero() {
       </div>
 
       <div className="relative z-10 w-full">
-        <Container>
+        <Container size="xl">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
           {/* Content */}
           <div className="text-center lg:text-left">
@@ -92,12 +93,16 @@ export function Hero() {
             </p>
 
             <div ref={ctaRef} className="mt-10 flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-              <Button variant="fancy" size="md" className="w-full sm:w-auto">
-                {heroContent.ctaPrimary}
-              </Button>
-              <Button variant="outline" size="md" className="w-full sm:w-auto">
-                {heroContent.ctaSecondary}
-              </Button>
+              <Link href="/canvas" className="inline-block">
+                <Button variant="fancy" size="md" className="w-full sm:w-auto">
+                  {heroContent.ctaPrimary}
+                </Button>
+              </Link>
+              <Link href="/canvas" className="inline-block">
+                <Button variant="outline" size="md" className="w-full sm:w-auto">
+                  {heroContent.ctaSecondary}
+                </Button>
+              </Link>
             </div>
 
             <div ref={trustRef} className="mt-12 flex flex-wrap items-center justify-center lg:justify-start gap-6 text-sm text-muted-foreground">

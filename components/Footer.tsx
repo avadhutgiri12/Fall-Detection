@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Image from "next/image";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Button } from "./ui/Button";
@@ -113,14 +114,15 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-8 md:gap-12 mb-16">
           {/* Brand column */}
           <div className="col-span-2 lg:col-span-1 footer-section">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center" aria-hidden="true">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-primary-foreground">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  <path d="M12 12v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </div>
-              <span className="text-xl font-bold text-foreground">{footerContent.companyName}</span>
+            <div className="mb-4">
+              <Image
+                src="/images/logo.png"
+                alt="CareSight AI Logo"
+                width={160}
+                height={50}
+                priority
+                className="opacity-90"
+              />
             </div>
             <p className="text-muted-foreground text-sm mb-6 max-w-xs">
               {footerContent.tagline}

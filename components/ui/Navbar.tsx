@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Logo } from "./Logo";
 
 if (typeof window !== "undefined") {
   // ScrollTrigger not needed for page-based navigation
@@ -139,88 +140,92 @@ export function Navbar() {
     }
   }, [activePath]);
 
-  return ( <header className="fixed top-4 left-0 right-0 z-50 flex justify-center px-4">
-    <nav
-      ref={navRef}
-      aria-label="Main navigation"
-      className={`
-        relative
-        flex
-        w-full
-        max-w-[850px]
-        items-center
-        rounded-full
-        border
-        p-1
-        transition-all
-        duration-300
-        ${
-          isScrolled
-            ? "border-[#f9e3ac]/20 bg-[#0c3f29]/95 shadow-[0_12px_35px_rgba(12,63,41,0.22)] backdrop-blur-xl"
-            : "border-[#f9e3ac]/15 bg-[#0c3f29] shadow-[0_8px_28px_rgba(12,63,41,0.14)]"
-        }
-      `}
-    >
-      {navItems.map((item, index) => {
-        const isActive = activePath === item.href;
+  return (
+    <header className="fixed top-4 left-0 right-0 z-50 flex justify-center px-4">
+      <Logo size="md" className="flex-shrink-0 mr-4" />
+      <nav
+        ref={navRef}
+        aria-label="Main navigation"
+        className={`
+          relative
+          flex
+          w-full
+          max-w-[850px]
+          items-center
+          rounded-full
+          border
+          h-15
+          p-1
+          transition-all
+          duration-300
+          ${
+            isScrolled
+              ? "border-[#f9e3ac]/20 bg-[#0c3f29]/95 shadow-[0_12px_35px_rgba(12,63,41,0.22)] backdrop-blur-xl"
+              : "border-[#f9e3ac]/15 bg-[#0c3f29] shadow-[0_8px_28px_rgba(12,63,41,0.14)]"
+          }
+        `}
+      >
+        {/* Logo on the left */}
 
-        return (
-          <Link
-            key={item.href}
-            ref={(element) => {
-              itemsRef.current[index] = element;
-            }}
-            href={item.href}
-            aria-current={isActive ? "page" : undefined}
-            className={`
-              relative
-              flex
-              min-h-[40px]
-              min-w-0
-              flex-1
-              items-center
-              justify-center
-              gap-2
-              rounded-full
-              px-8
-              py-1.5
-              text-center
-              text-sm
-              font-semibold
-              tracking-tight
-              transition-all
-              duration-300
-              ease-out
-              sm:min-h-[44px]
-              sm:px-8
-              sm:text-base
-              ${
-                isActive
-                  ? "bg-[#f9e3ac] text-[#0c3f29] shadow-[0_3px_12px_rgba(0,0,0,0.08)]"
-                  : "text-white hover:bg-white/10 hover:text-[#f9e3ac]"
-              }
-            `}
-          >
-            <span>{item.label}</span>
+        {navItems.map((item, index) => {
+          const isActive = activePath === item.href;
 
-            {isActive && (
-              <span
-                className="absolute inset-0 rounded-full ring-1 ring-inset ring-[#0c3f29]/[0.04]"
-                aria-hidden="true"
-              />
-            )}
-          </Link>
-        );
-      })}
+          return (
+            <Link
+              key={item.href}
+              ref={(element) => {
+                itemsRef.current[index] = element;
+              }}
+              href={item.href}
+              aria-current={isActive ? "page" : undefined}
+              className={`
+                relative
+                flex
+                min-h-[40px]
+                min-w-fit
+                flex-1
+                items-center
+                justify-center
+                gap-2
+                rounded-full
+                px-8
+                py-1.5
+                text-center
+                text-sm
+                font-semibold
+                tracking-tight
+                transition-all
+                duration-300
+                ease-out
+                sm:min-h-[44px]
+                sm:px-8
+                sm:text-base
+                ${
+                  isActive
+                    ? "bg-[#f9e3ac] text-[#0c3f29] shadow-[0_3px_12px_rgba(0,0,0,0.08)]"
+                    : "text-white hover:bg-white/10 hover:text-[#f9e3ac]"
+                }
+              `}
+            >
+              <span>{item.label}</span>
 
-      {/* Subtle top highlight */}
-      <div
-        className="pointer-events-none absolute inset-x-4 top-1 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent"
-        aria-hidden="true"
-      />
-    </nav>
-  </header>
+              {isActive && (
+                <span
+                  className="absolute inset-0 rounded-full ring-1 ring-inset ring-[#0c3f29]/[0.04]"
+                  aria-hidden="true"
+                />
+              )}
+            </Link>
+          );
+        })}
 
+        {/* Subtle top highlight */}
+        <div
+          className="pointer-events-none absolute inset-x-4 top-1 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent"
+          aria-hidden="true"
+        />
+      </nav>
+    </header>
   );
 }
 

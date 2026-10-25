@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Link from "next/link";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Card, CardContent } from "./ui/Card";
@@ -55,6 +56,49 @@ function FeatureIcon({ name, className = "" }: FeatureIconProps) {
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
         <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
         <line x1="23" y1="10" x2="23" y2="14" />
+      </svg>
+    ),
+    cpu: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <path d="M9 9h6v6H9z" />
+        <path d="M9 1h6v2H9z" />
+        <path d="M9 21h6v2H9z" />
+        <path d="M1 9h2v6H1z" />
+        <path d="M21 9h2v6H21z" />
+      </svg>
+    ),
+    bell: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+    ),
+    sliders: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <line x1="4" y1="21" x2="4" y2="14" />
+        <line x1="4" y1="10" x2="4" y2="3" />
+        <line x1="12" y1="21" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12" y2="3" />
+        <line x1="20" y1="21" x2="20" y2="16" />
+        <line x1="20" y1="12" x2="20" y2="3" />
+        <line x1="1" y1="14" x2="7" y2="14" />
+        <line x1="9" y1="8" x2="15" y2="8" />
+        <line x1="17" y1="16" x2="23" y2="16" />
+      </svg>
+    ),
+    "file-video": (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <path d="M23 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polygon points="23 7 16 12 23 17 23 7" />
+        <rect x="1" y="1" width="14" height="10" rx="2" />
+      </svg>
+    ),
+    globe: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="2" y1="12" x2="22" y2="12" />
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
       </svg>
     ),
   };
@@ -183,17 +227,19 @@ export function About() {
         </div>
 
         <div className="mt-16 text-center">
-          <Button
-            className="about-cta"
-            size="lg"
-            rightIcon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path d="M5 12h14M12 5l7 7-7 7" />
-              </svg>
-            }
-          >
-            Learn More About Our Technology
-          </Button>
+          <Link href="/about" className="inline-block">
+            <Button
+              className="about-cta w-full sm:w-auto"
+              size="lg"
+              rightIcon={
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+              }
+            >
+              About Our Technology
+            </Button>
+          </Link>
         </div>
       </div>
     </SectionWrapper>

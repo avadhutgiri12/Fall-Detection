@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Link from "next/link";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Card, CardContent } from "./ui/Card";
@@ -184,13 +185,15 @@ export function HowItWorks() {
         </div>
 
         <div className="mt-16 text-center">
-          <Button variant="outline" size="lg" rightIcon={
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-          }>
-            View Detailed Setup Guide
-          </Button>
+          <Link href="/how-it-works" className="inline-block">
+            <Button variant="outline" size="lg" rightIcon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            }>
+              View Detailed Setup Guide
+            </Button>
+          </Link>
         </div>
       </div>
     </SectionWrapper>

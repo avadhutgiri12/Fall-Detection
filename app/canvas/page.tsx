@@ -3,8 +3,8 @@ import { Canvas } from "@/components/Canvas";
 import { Footer } from "@/components/Footer";
 
 export const metadata: Metadata = {
-  title: "Interactive Canvas | FallGuard Fall Detection Technology",
-  description: "Explore FallGuard's AI-powered fall detection through interactive visualizations, real-time demos, and technical deep-dives.",
+  title: "Live Demo | CareSight AI Camera Fall Detection",
+  description: "Experience CareSight AI's camera-based fall detection through live webcam detection, video upload analysis, and YOLOv8 pose estimation demos.",
 };
 
 export default function CanvasPage() {

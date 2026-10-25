@@ -17,14 +17,14 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "FallGuard - Advanced Fall Detection for Safer Living",
-    template: "%s | FallGuard"
+    default: "CareSight AI - Camera-Based Fall Detection with YOLOv8",
+    template: "%s | CareSight AI"
   },
-  description: "AI-powered fall detection system with real-time monitoring, instant caregiver alerts, and 99.2% accuracy. Protect your loved ones with confidence.",
-  keywords: ["fall detection", "senior safety", "elderly monitoring", "caregiver alerts", "AI healthcare", "aging in place", "medical alert"],
-  authors: [{ name: "FallGuard" }],
-  creator: "FallGuard",
-  publisher: "FallGuard",
+  description: "Camera-based fall detection system powered by YOLOv8 pose estimation. Turn any webcam into an intelligent fall detection system with instant alerts and privacy-first processing.",
+  keywords: ["fall detection", "camera fall detection", "YOLOv8 pose estimation", "senior safety", "elderly monitoring", "caregiver alerts", "AI healthcare", "aging in place", "webcam fall detection"],
+  authors: [{ name: "CareSight AI" }],
+  creator: "CareSight AI",
+  publisher: "CareSight AI",
   robots: {
     index: true,
     follow: true,
@@ -39,25 +39,25 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://fallguard.com",
-    siteName: "FallGuard",
-    title: "FallGuard - Advanced Fall Detection for Safer Living",
-    description: "AI-powered fall detection system with real-time monitoring and instant caregiver alerts.",
+    url: "https://caresight.ai",
+    siteName: "CareSight AI",
+    title: "CareSight AI - Camera-Based Fall Detection with YOLOv8",
+    description: "Camera-based fall detection system powered by YOLOv8 pose estimation. Turn any webcam into an intelligent fall detection system.",
     images: [
       {
         url: "/images/og-image.jpg",
         width: 1200,
         height: 630,
-        alt: "FallGuard - Advanced Fall Detection System",
+        alt: "CareSight AI - Camera-Based Fall Detection System",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "FallGuard - Advanced Fall Detection",
-    description: "AI-powered fall detection with 99.2% accuracy and instant alerts.",
+    title: "CareSight AI - Camera-Based Fall Detection",
+    description: "Camera-based fall detection powered by YOLOv8 pose estimation with instant alerts.",
     images: ["/images/og-image.jpg"],
-    creator: "@fallguard",
+    creator: "@caresightai",
   },
   icons: {
     icon: "/favicon.ico",
