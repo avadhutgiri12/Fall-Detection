@@ -147,7 +147,7 @@ export function Navbar() {
         ref={navRef}
         aria-label="Main navigation"
         className={`
-          relative
+          fixed
           flex
           w-full
           max-w-[850px]
