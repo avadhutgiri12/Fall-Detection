@@ -72,17 +72,18 @@ class FallDetector:
         """Update confidence threshold."""
         self.conf_threshold = max(0.0, min(1.0, threshold))
 
-    def detect_frame(self, frame: np.ndarray) -> DetectionResult:
+    def detect_frame(self, frame: np.ndarray, half: bool = False) -> DetectionResult:
         """
         Run detection on a single frame.
 
         Args:
             frame: BGR image as numpy array
+            half: Use FP16 half-precision inference (reduces memory usage)
 
         Returns:
             DetectionResult with boxes, scores, fall flags
         """
-        results = self.model(frame, verbose=False)
+        results = self.model(frame, verbose=False, half=half)
 
         boxes = []
         scores = []
@@ -168,7 +169,10 @@ class FallDetector:
         self,
         input_path: str,
         output_path: str,
-        progress_callback=None
+        progress_callback=None,
+        frame_skip: int = 1,
+        max_resolution: int = 640,
+        half: bool = True
     ) -> List[DetectionResult]:
         """
         Process entire video file and save annotated output.
@@ -177,24 +181,35 @@ class FallDetector:
             input_path: Path to input video
             output_path: Path to save annotated video
             progress_callback: Optional function(progress: float) called during processing
+            frame_skip: Process every Nth frame (1 = all frames, 2 = every other, etc.)
+            max_resolution: Max width/height for inference (frames resized if larger)
+            half: Use FP16 half-precision inference (reduces memory usage ~50%)
 
         Returns:
-            List of DetectionResult per frame
+            List of DetectionResult per frame (only for processed frames)
         """
+        import gc
+
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
             raise ValueError(f"Could not open video: {input_path}")
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+        # Calculate output dimensions (respect max_resolution)
+        scale = min(max_resolution / max(orig_width, orig_height), 1.0)
+        out_width = int(orig_width * scale)
+        out_height = int(orig_height * scale)
+
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        out = cv2.VideoWriter(output_path, fourcc, fps, (out_width, out_height))
 
         all_results = []
         frame_idx = 0
+        processed_count = 0
 
         try:
             while True:
@@ -202,19 +217,45 @@ class FallDetector:
                 if not ret:
                     break
 
-                result = self.detect_frame(frame)
+                # Skip frames based on frame_skip
+                if frame_skip > 1 and (frame_idx % frame_skip != 0):
+                    # Still write the original frame to output for smooth video
+                    if scale < 1.0:
+                        frame = cv2.resize(frame, (out_width, out_height))
+                    out.write(frame)
+                    frame_idx += 1
+                    if progress_callback and total_frames > 0:
+                        progress_callback(frame_idx / total_frames)
+                    continue
+
+                # Resize frame for inference if needed
+                inference_frame = frame
+                if scale < 1.0:
+                    inference_frame = cv2.resize(frame, (out_width, out_height))
+
+                # Run detection with FP16 for memory efficiency
+                result = self.detect_frame(inference_frame, half=half)
                 all_results.append(result)
 
-                annotated = self.draw_detections(frame, result)
+                # Draw detections on the inference frame (which matches output size)
+                annotated = self.draw_detections(inference_frame, result)
                 out.write(annotated)
 
+                processed_count += 1
                 frame_idx += 1
+
+                # Progress based on total frames (not just processed)
                 if progress_callback and total_frames > 0:
                     progress_callback(frame_idx / total_frames)
+
+                # Periodic garbage collection to free memory
+                if processed_count % 10 == 0:
+                    gc.collect()
 
         finally:
             cap.release()
             out.release()
+            gc.collect()
 
         return all_results
 

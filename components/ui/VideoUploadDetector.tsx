@@ -40,6 +40,8 @@ export function VideoUploadDetector({
   const [job, setJob] = useState<VideoJob | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [confThreshold, setConfThreshold] = useState(initialConfThreshold);
+  const [frameSkip, setFrameSkip] = useState(3); // Default to 3 for free tier memory optimization
+  const [maxResolution, setMaxResolution] = useState(640); // Default to 640 for free tier
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [email, setEmail] = useState("");
@@ -157,6 +159,8 @@ export function VideoUploadDetector({
       const formData = new FormData();
       formData.append("file", selectedFile);
       formData.append("conf_threshold", confThreshold.toString());
+      formData.append("frame_skip", frameSkip.toString());
+      formData.append("max_resolution", maxResolution.toString());
 
       const res = await fetch(`${apiUrl}/api/detect/video`, {
         method: "POST",
@@ -182,7 +186,7 @@ export function VideoUploadDetector({
     } finally {
       setIsUploading(false);
     }
-  }, [selectedFile, confThreshold, apiUrl, startPolling, isEmailConfigured, toast]);
+  }, [selectedFile, confThreshold, frameSkip, maxResolution, apiUrl, startPolling, isEmailConfigured, toast]);
 
   // Download processed video
   const handleDownload = useCallback(() => {
@@ -541,6 +545,42 @@ export function VideoUploadDetector({
               />
               <p className="text-xs text-muted-foreground mt-1">
                 Lower = more sensitive (more false positives). Higher = fewer detections.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="video-frame-skip" className="block text-sm font-medium mb-2">
+                Frame Skip: {frameSkip} (process every {frameSkip} frame)
+              </Label>
+              <Input
+                id="video-frame-skip"
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                value={frameSkip}
+                onChange={(e) => setFrameSkip(parseInt(e.target.value))}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Higher = faster processing, less memory, lower temporal resolution. Default 3 for free tier.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="video-max-resolution" className="block text-sm font-medium mb-2">
+                Max Resolution: {maxResolution}px
+              </Label>
+              <Input
+                id="video-max-resolution"
+                type="range"
+                min="320"
+                max="1280"
+                step="80"
+                value={maxResolution}
+                onChange={(e) => setMaxResolution(parseInt(e.target.value))}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Frames resized to this max dimension before inference. Lower = less memory, faster. Default 640 for free tier.
               </p>
             </div>
             <div className="text-sm text-muted-foreground">
