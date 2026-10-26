@@ -3,6 +3,7 @@ Fall Detection Core Logic
 Extracted from Streamlit app for reuse in FastAPI backend.
 """
 
+import os
 import cv2
 import time
 import smtplib
@@ -13,7 +14,10 @@ from ultralytics import YOLO
 from dataclasses import dataclass
 from typing import List, Optional
 import threading
-from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 @dataclass
@@ -41,17 +45,18 @@ class FallDetector:
 
     def __init__(
         self,
-        model_path: str = "yolov8n-pose.pt",
-        conf_threshold: float = 0.6,
-        sender_email: str = "avadhutgiri143@gmail.com",
-        sender_pass: str = "svvp omtr jzhl jdzc",
-        target_email: str = "your-email@example.com",
+        model_path: str = None,
+        conf_threshold: float = None,
+        sender_email: str = None,
+        sender_pass: str = None,
+        target_email: str = None,
     ):
-        self.model_path = model_path
-        self.conf_threshold = conf_threshold
-        self.sender_email = sender_email
-        self.sender_pass = sender_pass
-        self.target_email = target_email
+        # Use environment variables as defaults, with fallbacks for local development
+        self.model_path = model_path or os.getenv("MODEL_PATH", "yolov8n-pose.pt")
+        self.conf_threshold = conf_threshold if conf_threshold is not None else float(os.getenv("CONF_THRESHOLD", "0.6"))
+        self.sender_email = sender_email or os.getenv("SMTP_USERNAME", "your-email@gmail.com")
+        self.sender_pass = sender_pass or os.getenv("SMTP_PASSWORD", "your-app-password")
+        self.target_email = target_email or os.getenv("TARGET_EMAIL", "your-email@example.com")
         self._model: Optional[YOLO] = None
         self._last_alert_time = 0.0
         self._alert_lock = threading.Lock()
@@ -125,9 +130,19 @@ class FallDetector:
             msg['To'] = self.target_email
             msg.set_content(f"System detected a fall with {score:.2%} confidence. Immediate check required.")
 
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-                smtp.login(self.sender_email, self.sender_pass)
-                smtp.send_message(msg)
+            smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+            smtp_port = int(os.getenv("SMTP_PORT", "465"))
+            use_ssl = os.getenv("SMTP_USE_SSL", "true").lower() == "true"
+
+            if use_ssl:
+                with smtplib.SMTP_SSL(smtp_server, smtp_port) as smtp:
+                    smtp.login(self.sender_email, self.sender_pass)
+                    smtp.send_message(msg)
+            else:
+                with smtplib.SMTP(smtp_server, smtp_port) as smtp:
+                    smtp.starttls()
+                    smtp.login(self.sender_email, self.sender_pass)
+                    smtp.send_message(msg)
             return True
         except Exception:
             return False
