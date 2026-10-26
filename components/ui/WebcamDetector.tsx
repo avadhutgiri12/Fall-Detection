@@ -20,8 +20,12 @@ export interface WebcamDetectorProps {
 }
 
 export function WebcamDetector({
-  wsUrl = "ws://localhost:8000/ws/detect",
-  apiUrl = "http://localhost:8000",
+  wsUrl = typeof window !== "undefined"
+    ? `${process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"}/ws/detect`
+    : "ws://localhost:8000/ws/detect",
+  apiUrl = typeof window !== "undefined"
+    ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    : "http://localhost:8000",
   initialConfThreshold = 0.6,
 }: WebcamDetectorProps) {
   // Use the camera hook for camera management

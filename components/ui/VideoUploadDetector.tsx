@@ -31,7 +31,9 @@ export interface VideoUploadDetectorProps {
 }
 
 export function VideoUploadDetector({
-  apiUrl = "http://localhost:8000",
+  apiUrl = typeof window !== "undefined"
+    ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    : "http://localhost:8000",
   initialConfThreshold = 0.6,
   onComplete,
 }: VideoUploadDetectorProps) {
