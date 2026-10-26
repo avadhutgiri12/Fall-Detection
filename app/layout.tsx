@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Navbar } from "@/components/ui/Navbar";
+import { ToastProvider } from "@/components/ui/ToastProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -95,11 +96,12 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        
-        <Navbar />
-        <main id="main-content" className="flex-1">
-          {children}
-        </main>
+        <ToastProvider>
+          <Navbar />
+          <main id="main-content" className="flex-1">
+            {children}
+          </main>
+        </ToastProvider>
       </body>
     </html>
   );
