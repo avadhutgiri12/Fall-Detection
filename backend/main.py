@@ -247,7 +247,9 @@ async def detect_frame(request: DetectFrameRequest):
 @app.post("/api/detect/video", response_model=VideoUploadResponse)
 async def upload_video(
     file: UploadFile = File(...),
-    conf_threshold: float = Query(0.6, ge=0.0, le=1.0)
+    conf_threshold: float = Query(0.6, ge=0.0, le=1.0),
+    frame_skip: int = Query(3, ge=1, le=10, description="Process every Nth frame (higher = faster, less memory)"),
+    max_resolution: int = Query(640, ge=320, le=1280, description="Max width/height for inference")
 ):
     """
     Upload video for fall detection processing.
@@ -286,8 +288,8 @@ async def upload_video(
     )
     video_jobs[job_id] = job
 
-    # Start background processing
-    asyncio.create_task(process_video_job(job_id, str(input_path), str(output_path), conf_threshold))
+    # Start background processing with memory optimization params
+    asyncio.create_task(process_video_job(job_id, str(input_path), str(output_path), conf_threshold, frame_skip, max_resolution))
 
     return VideoUploadResponse(
         job_id=job_id,
@@ -296,7 +298,7 @@ async def upload_video(
     )
 
 
-async def process_video_job(job_id: str, input_path: str, output_path: str, conf_threshold: float):
+async def process_video_job(job_id: str, input_path: str, output_path: str, conf_threshold: float, frame_skip: int = 3, max_resolution: int = 640):
     """Background task to process video."""
     job = video_jobs.get(job_id)
     if not job or not detector:
@@ -315,7 +317,10 @@ async def process_video_job(job_id: str, input_path: str, output_path: str, conf
             detector.process_video,
             input_path,
             output_path,
-            update_progress
+            update_progress,
+            frame_skip,
+            max_resolution,
+            True  # half=True for FP16 inference
         )
 
         # Convert results to serializable format
