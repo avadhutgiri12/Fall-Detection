@@ -51,10 +51,29 @@ app = FastAPI(
 # CORS configuration from environment
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 
+# For development, add common local origins
+dev_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+# Allow all origins in development if explicitly enabled
+if os.getenv("ALLOW_ALL_ORIGINS", "false").lower() == "true":
+    cors_origins = ["*"]
+    allow_credentials = False
+else:
+    # Combine and deduplicate
+    cors_origins = list(dict.fromkeys([*cors_origins, *dev_origins]))
+    allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in cors_origins],
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

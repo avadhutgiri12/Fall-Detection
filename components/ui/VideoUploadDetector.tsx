@@ -2,9 +2,11 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "./Button";
+import { CanvasButton } from "./CanvasButton";
 import { Card, CardContent, CardHeader, CardTitle } from "./Card";
 import { Input } from "./Input";
 import { Label } from "./Input";
+import { useToast } from "./ToastProvider";
 
 interface VideoJob {
   job_id: string;
@@ -39,7 +41,33 @@ export function VideoUploadDetector({
   const [confThreshold, setConfThreshold] = useState(initialConfThreshold);
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [email, setEmail] = useState("");
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Toast notifications
+  const { toast } = useToast();
+
+  // Update target email on backend
+  const updateTargetEmail = useCallback(async (targetEmail: string) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_email: targetEmail }),
+      });
+      if (!response.ok) {
+        console.error('[VideoUploadDetector] Failed to update target email:', await response.text());
+        toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
+      } else {
+        console.info('[VideoUploadDetector] Target email updated:', targetEmail);
+        toast({ type: 'success', title: 'Email Configured', message: 'email configured successfully' });
+      }
+    } catch (err) {
+      console.error('[VideoUploadDetector] Failed to update target email:', err);
+      toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
+    }
+  }, [apiUrl, toast]);
 
   // Poll for job status
   const pollJobStatus = useCallback(async (jobId: string) => {
@@ -216,6 +244,7 @@ export function VideoUploadDetector({
             <input
               type="file"
               id="video-upload"
+              ref={fileInputRef}
               accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska"
               onChange={handleFileChange}
               className="hidden"
@@ -242,7 +271,11 @@ export function VideoUploadDetector({
                   : "Supports MP4, MOV, AVI, MKV (max 100MB)"}
               </p>
               {!selectedFile && (
-                <Button variant="outline" size="lg">
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={() => fileInputRef.current?.click()}
+                >
                   Choose File
                 </Button>
               )}
@@ -436,6 +469,34 @@ export function VideoUploadDetector({
             )}
           </div>
         )}
+
+        {/* Email Alerts - Always visible for better UX */}
+        <div className="border-t border-border pt-6">
+          <Label htmlFor="video-email" className="block text-sm font-medium mb-2">
+            Email for Alerts
+          </Label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Input
+              id="video-email"
+              type="email"
+              placeholder="Enter email for fall alerts"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full sm:flex-1 text-sm"
+            />
+            <CanvasButton
+              variant="secondary"
+              size="sm"
+              onClick={() => email.trim() && void updateTargetEmail(email.trim())}
+              disabled={!email.trim()}
+            >
+              Set Email
+            </CanvasButton>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Fall detection alerts will be sent to this email address.
+          </p>
+        </div>
 
         {/* Settings */}
         <details className="group border-t border-border pt-6">

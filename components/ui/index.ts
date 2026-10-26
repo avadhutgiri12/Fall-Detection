@@ -36,3 +36,8 @@ export type { UseCameraReturn, UseCameraOptions } from "../hooks/useCamera";
 // Buttons
 export { CanvasButton } from "./CanvasButton";
 export type { CanvasButtonProps } from "./CanvasButton";
+
+// Toast
+export { ToastProvider, useToast } from "./ToastProvider";
+export { Toast } from "./Toast";
+export type { ToastType } from "./Toast";

@@ -6,6 +6,7 @@ import { Card, CardContent } from "./Card";
 import { Input, Label } from "./Input";
 import { useFallDetection } from "../hooks/useFallDetection";
 import { useCamera } from "../hooks/useCamera";
+import { useToast } from "./ToastProvider";
 
 export interface WebcamDetectorProps {
   /** WebSocket endpoint that accepts JSON { image, conf_threshold }. */
@@ -22,7 +23,6 @@ export function WebcamDetector({
   wsUrl = "ws://localhost:8000/ws/detect",
   apiUrl = "http://localhost:8000",
   initialConfThreshold = 0.6,
-  onFallDetected,
 }: WebcamDetectorProps) {
   // Use the camera hook for camera management
   const {
@@ -33,6 +33,14 @@ export function WebcamDetector({
     stopCamera,
     toggleCamera,
   } = useCamera({ initialFacingMode: "user" });
+
+  // Toast notifications
+  const { toast } = useToast();
+
+  // Handle fall detection with toast (cooldown handled by useFallDetection hook)
+  const handleFallDetected = useCallback((score: number) => {
+    toast({ type: 'warning', title: 'Fall Detected!', message: `Alert email sent (${(score * 100).toFixed(0)}% confidence)` });
+  }, [toast]);
 
   // Use the detection hook for WebSocket and frame capture logic
   const {
@@ -50,7 +58,7 @@ export function WebcamDetector({
     setConfThreshold,
   } = useFallDetection({
     wsUrl,
-    onFallDetected,
+    onFallDetected: handleFallDetected,
   });
 
   // Local UI state
@@ -96,22 +104,16 @@ export function WebcamDetector({
       });
       if (!response.ok) {
         console.error('[WebcamDetector] Failed to update target email:', await response.text());
+        toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
       } else {
         console.info('[WebcamDetector] Target email updated:', targetEmail);
+        toast({ type: 'success', title: 'Email Configured', message: 'email configured successfully' });
       }
     } catch (err) {
       console.error('[WebcamDetector] Failed to update target email:', err);
+      toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
     }
-  }, [apiUrl]);
-
-  // Auto-save email when it changes (with debounce)
-  useEffect(() => {
-    if (!email.trim()) return;
-    const timer = setTimeout(() => {
-      void updateTargetEmail(email.trim());
-    }, 1000); // 1 second debounce
-    return () => clearTimeout(timer);
-  }, [email, updateTargetEmail]);
+  }, [apiUrl, toast]);
 
   // Draw detections on overlay canvas
   useEffect(() => {
@@ -370,6 +372,14 @@ export function WebcamDetector({
                   className="w-64 text-sm"
                   disabled={!isCameraOn}
                 />
+                <CanvasButton
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => email.trim() && void updateTargetEmail(email.trim())}
+                  disabled={!isCameraOn || !email.trim()}
+                >
+                  Set Email
+                </CanvasButton>
               </div>
             </div>
 
