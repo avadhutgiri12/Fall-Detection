@@ -19,8 +19,8 @@ const navItems: NavItem[] = [
   { label: "Home", href: "/" },
   { label: "About", href: "/about" },
   { label: "How It Works", href: "/how-it-works" },
-  { label: "Contact", href: "/contact" },
   { label: "Canvas", href: "/canvas" },
+  { label: "Contact", href: "/contact" },
 ];
 
 export function Navbar() {
