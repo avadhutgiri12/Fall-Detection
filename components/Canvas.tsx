@@ -13,6 +13,10 @@ import { canvasContent } from "../data/content";
 
 gsap.registerPlugin(ScrollTrigger);
 
+// Use environment variables for backend URLs (with localhost fallbacks for dev)
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+
 interface DemoIconProps {
   name: string;
   className?: string;
@@ -310,8 +314,8 @@ export function Canvas() {
           {activeTab === "webcam" && (
             <div role="tabpanel" aria-label="Live camera detection">
               <WebcamDetector
-                wsUrl="ws://localhost:8000/ws/detect"
-                apiUrl="http://localhost:8000"
+                wsUrl={`${WS_URL}/ws/detect`}
+                apiUrl={API_URL}
                 initialConfThreshold={0.6}
                 onFallDetected={handleFallDetected}
               />
@@ -322,7 +326,7 @@ export function Canvas() {
           {activeTab === "upload" && (
             <div role="tabpanel" aria-label="Video upload analysis">
               <VideoUploadDetector
-                apiUrl="http://localhost:8000"
+                apiUrl={API_URL}
                 initialConfThreshold={0.6}
               />
             </div>

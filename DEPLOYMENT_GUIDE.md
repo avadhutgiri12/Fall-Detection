@@ -60,6 +60,8 @@ git push -u origin main
 4. Render will detect `backend/render.yaml` and show the service configuration
 5. Click **"Apply"** to create the service
 
+> **Important**: The `render.yaml` includes `rootDir: backend` which tells Render to run commands from the `backend/` directory. This is required because `requirements.txt` and `main.py` are in the `backend/` folder, not the repo root.
+
 **Option B: Manual Service Creation**
 
 1. Go to [Render Dashboard](https://dashboard.render.com) and sign in with GitHub
@@ -67,7 +69,7 @@ git push -u origin main
 3. Select your `fall-detection-system` repository
 4. Configure:
    - **Name**: `fall-detection-api`
-   - **Root Directory**: `backend`
+   - **Root Directory**: `backend`  *(Critical: must be set to `backend`)*
    - **Runtime**: `Python 3`
    - **Build Command**: `pip install --upgrade pip && pip install -r requirements.txt`
    - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
