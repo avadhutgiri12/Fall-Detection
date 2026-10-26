@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Button } from "./Button";
 import { CanvasButton } from "./CanvasButton";
 import { Card, CardContent, CardHeader, CardTitle } from "./Card";
 import { Input } from "./Input";
@@ -42,6 +41,7 @@ export function VideoUploadDetector({
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [email, setEmail] = useState("");
+  const [isEmailConfigured, setIsEmailConfigured] = useState(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +61,7 @@ export function VideoUploadDetector({
         toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
       } else {
         console.info('[VideoUploadDetector] Target email updated:', targetEmail);
+        setIsEmailConfigured(true);
         toast({ type: 'success', title: 'Email Configured', message: 'email configured successfully' });
       }
     } catch (err) {
@@ -142,6 +143,11 @@ export function VideoUploadDetector({
   const handleUpload = useCallback(async () => {
     if (!selectedFile) return;
 
+    if (!isEmailConfigured) {
+      toast({ type: 'error', title: 'Email Required', message: 'Please set email first' });
+      return;
+    }
+
     setError(null);
     setIsUploading(true);
 
@@ -174,7 +180,7 @@ export function VideoUploadDetector({
     } finally {
       setIsUploading(false);
     }
-  }, [selectedFile, confThreshold, apiUrl, startPolling]);
+  }, [selectedFile, confThreshold, apiUrl, startPolling, isEmailConfigured, toast]);
 
   // Download processed video
   const handleDownload = useCallback(() => {
@@ -271,13 +277,13 @@ export function VideoUploadDetector({
                   : "Supports MP4, MOV, AVI, MKV (max 100MB)"}
               </p>
               {!selectedFile && (
-                <Button
-                  variant="outline"
+                <CanvasButton
+                  variant="ghost"
                   size="lg"
                   onClick={() => fileInputRef.current?.click()}
                 >
                   Choose File
-                </Button>
+                </CanvasButton>
               )}
             </label>
 
@@ -295,13 +301,23 @@ export function VideoUploadDetector({
                     <p className="text-sm text-muted-foreground">{formatSize(selectedFile.size)} • {selectedFile.type}</p>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => setSelectedFile(null)}>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <CanvasButton variant="ghost" size="sm" onClick={() => setSelectedFile(null)}>
                     Remove
-                  </Button>
-                  <Button variant="fancy" size="lg" onClick={handleUpload} disabled={isUploading}>
-                    {isUploading ? "Uploading..." : "Upload & Analyze"}
-                  </Button>
+                  </CanvasButton>
+                  <CanvasButton variant="primary" size="lg" onClick={handleUpload} disabled={isUploading || !isEmailConfigured} isLoading={isUploading}>
+                    Upload & Analyze
+                  </CanvasButton>
+                  {!isEmailConfigured && !isUploading && (
+                    <span className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1 self-center sm:self-start">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      Set email first to analyze video
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -339,9 +355,9 @@ export function VideoUploadDetector({
               </p>
             </div>
 
-            <Button variant="outline" onClick={handleReset}>
+            <CanvasButton variant="ghost" size="md" onClick={handleReset}>
               Cancel
-            </Button>
+            </CanvasButton>
           </div>
         )}
 
@@ -367,33 +383,33 @@ export function VideoUploadDetector({
                   <div>
                     <h4 className="font-medium text-foreground mb-3">Detection Summary</h4>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                        <div className="text-2xl font-bold text-foreground">
+                      <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
+                        <div className="text-2xl font-bold">
                           {job.results.length}
                         </div>
-                        <div className="text-sm text-muted-foreground">Frames Processed</div>
+                        <div className="text-sm text-gray-300">Frames Processed</div>
                       </div>
-                      <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                        <div className="text-2xl font-bold text-red-600">
+                      <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
+                        <div className="text-2xl font-bold text-red-400">
                           {job.results.filter((r) => r.falls.some((f) => f)).length}
                         </div>
-                        <div className="text-sm text-muted-foreground">Frames with Falls</div>
+                        <div className="text-sm text-gray-300">Frames with Falls</div>
                       </div>
-                      <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                        <div className="text-2xl font-bold text-foreground">
+                      <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
+                        <div className="text-2xl font-bold">
                           {job.results.length > 0
                             ? (Math.max(...job.results.flatMap((r) => r.scores)) * 100).toFixed(1) + "%"
                             : "N/A"}
                         </div>
-                        <div className="text-sm text-muted-foreground">Max Confidence</div>
+                        <div className="text-sm text-gray-300">Max Confidence</div>
                       </div>
-                      <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                        <div className="text-2xl font-bold text-foreground">
+                      <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
+                        <div className="text-2xl font-bold">
                           {job.results.length > 0
                             ? (job.results.filter((r) => r.falls.some((f) => f)).length / job.results.length * 100).toFixed(1) + "%"
                             : "0%"}
                         </div>
-                        <div className="text-sm text-muted-foreground">Fall Rate</div>
+                        <div className="text-sm text-gray-300">Fall Rate</div>
                       </div>
                     </div>
 
@@ -434,17 +450,17 @@ export function VideoUploadDetector({
                 )}
 
                 <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-border">
-                  <Button variant="fancy" size="lg" onClick={handleDownload} className="w-full sm:w-auto">
+                  <CanvasButton variant="primary" size="lg" onClick={handleDownload} className="w-full sm:w-auto">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mr-2" aria-hidden="true">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                       <polyline points="7 10 12 15 17 10" />
                       <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
                     Download Annotated Video
-                  </Button>
-                  <Button variant="outline" size="lg" onClick={handleReset} className="w-full sm:w-auto">
+                  </CanvasButton>
+                  <CanvasButton variant="ghost" size="lg" onClick={handleReset} className="w-full sm:w-auto">
                     Analyze Another Video
-                  </Button>
+                  </CanvasButton>
                 </div>
               </>
             ) : (
@@ -462,9 +478,9 @@ export function VideoUploadDetector({
                     <p className="text-red-700 text-sm">{job.error || "Unknown error occurred"}</p>
                   </div>
                 </div>
-                <Button variant="outline" onClick={handleReset} className="mt-4 w-full sm:w-auto">
+                <CanvasButton variant="ghost" size="lg" onClick={handleReset} className="mt-4 w-full sm:w-auto">
                   Try Again
-                </Button>
+                </CanvasButton>
               </div>
             )}
           </div>

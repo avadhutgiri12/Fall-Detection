@@ -14,10 +14,10 @@ export interface Toast {
 }
 
 const typeStyles: Record<ToastType, string> = {
-  success: "bg-green-50 text-green-900 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800",
-  error: "bg-red-50 text-red-900 border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800",
-  info: "bg-blue-50 text-blue-900 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800",
-  warning: "bg-amber-50 text-amber-900 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800",
+  success: "bg-green-50 text-green-900 border-green-300 dark:bg-green-900 dark:text-green-100 dark:border-green-700",
+  error: "bg-red-50 text-red-900 border-red-300 dark:bg-red-900 dark:text-red-100 dark:border-red-700",
+  info: "bg-blue-50 text-blue-900 border-blue-300 dark:bg-blue-900 dark:text-blue-100 dark:border-blue-700",
+  warning: "bg-amber-50 text-amber-900 border-amber-300 dark:bg-amber-900 dark:text-amber-100 dark:border-amber-700",
 };
 
 const typeIcons: Record<ToastType, React.ReactNode> = {
@@ -97,7 +97,7 @@ export function Toast({ toast, onClose, index, total }: ToastProps) {
     >
       <div
         className={`
-          flex items-start gap-3 p-4 rounded-xl border shadow-lg
+          flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl
           ${typeStyles[toast.type]}
           animate-in slide-in-from-right-full duration-300
         `}

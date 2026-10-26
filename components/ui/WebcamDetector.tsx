@@ -65,6 +65,7 @@ export function WebcamDetector({
   const [showSettings, setShowSettings] = useState(false);
   const [combinedError, setCombinedError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
+  const [isEmailConfigured, setIsEmailConfigured] = useState(false);
   const overlayRef = useRef<HTMLCanvasElement>(null);
 
   // Combine errors from both hooks
@@ -107,6 +108,7 @@ export function WebcamDetector({
         toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
       } else {
         console.info('[WebcamDetector] Target email updated:', targetEmail);
+        setIsEmailConfigured(true);
         toast({ type: 'success', title: 'Email Configured', message: 'email configured successfully' });
       }
     } catch (err) {
@@ -189,12 +191,13 @@ export function WebcamDetector({
 
   const handleStartDetectionClick = useCallback(() => {
     if (videoRef.current) {
-      if (email.trim()) {
-        void updateTargetEmail(email.trim());
+      if (!isEmailConfigured) {
+        toast({ type: 'error', title: 'Email Required', message: 'Please set email first' });
+        return;
       }
       void startDetection(videoRef.current);
     }
-  }, [startDetection, email, updateTargetEmail]);
+  }, [startDetection, isEmailConfigured, toast]);
 
   const handleStopDetectionClick = useCallback(() => {
     void stopDetection();
@@ -406,10 +409,20 @@ export function WebcamDetector({
                     variant={isDetecting ? "danger" : "primary"}
                     size="md"
                     onClick={isDetecting ? handleStopDetectionClick : handleStartDetectionClick}
-                    disabled={!isCameraOn}
+                    disabled={!isCameraOn || !isEmailConfigured}
                   >
                     {isDetecting ? "Stop Detection" : "Start Detection"}
                   </CanvasButton>
+                  {!isEmailConfigured && !isDetecting && (
+                    <span className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      Set email first to start detection
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 text-sm">
                   <span className="text-gray-500 dark:text-gray-400">Status:</span>
