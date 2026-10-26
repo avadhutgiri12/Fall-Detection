@@ -3,6 +3,7 @@ FastAPI Backend for Fall Detection
 Provides WebSocket for real-time detection and REST for video upload.
 """
 
+import os
 import uuid
 import asyncio
 import json
@@ -14,6 +15,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, H
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from detector import FallDetector, VideoDetectionResult, decode_base64_image, encode_frame_to_base64
 
@@ -29,8 +34,8 @@ video_jobs: Dict[str, VideoDetectionResult] = {}
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global detector
-    model_path = Path(__file__).parent / "yolov8n-pose.pt"
-    detector = FallDetector(model_path=str(model_path))
+    model_path = os.getenv("MODEL_PATH", str(Path(__file__).parent / "yolov8n-pose.pt"))
+    detector = FallDetector(model_path=model_path)
     print(f"✓ FallDetector initialized with model: {model_path}")
     yield
     print("✓ Application shutdown")
@@ -43,10 +48,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS for frontend (Next.js on port 3000)
+# CORS configuration from environment
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[origin.strip() for origin in cors_origins],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -398,4 +405,6 @@ async def update_config(request: ConfigUpdateRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port, reload=True)

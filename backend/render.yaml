@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: fall-detection-api
+    runtime: python
+    plan: free
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: MODEL_PATH
+        value: "yolov8n-pose.pt"
+      - key: CONF_THRESHOLD
+        value: "0.6"
+      - key: TARGET_EMAIL
+        sync: false
+      - key: SMTP_SERVER
+        value: "smtp.gmail.com"
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_USE_SSL
+        value: "true"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+    autoDeploy: true
