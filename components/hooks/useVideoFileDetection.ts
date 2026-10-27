@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useFrameStreamDetection, type DetectionResult } from "./useFrameStreamDetection";
+import { useFrameStreamDetection, type DetectionResult, type EmailAlertResult } from "./useFrameStreamDetection";
 import { useVideoCache } from "./useVideoCache";
 
 export type { DetectionResult };
@@ -21,7 +21,7 @@ export interface UseVideoFileDetectionOptions {
   sessionId?: string;
   onFrameResult?: (result: DetectionResult) => void;
   onFrameError?: (frameIndex: number, error: Error) => void;
-  onFallDetected?: (score: number, frameIndex: number) => void;
+  onFallDetected?: (score: number, frameIndex: number, emailSent: boolean, emailAlertResult?: EmailAlertResult) => void;
   onProgress?: (progress: number) => void;
   onComplete?: (results: DetectionResult[]) => void;
   onError?: (error: string) => void;
@@ -120,7 +120,7 @@ export function useVideoFileDetection({
       completedFrameIndicesRef.current.add(frameIndex);
       callbacksRef.current.onFrameError?.(frameIndex, err);
     },
-    onFallDetected: (score, frameIndex) => callbacksRef.current.onFallDetected?.(score, frameIndex),
+    onFallDetected: (score, frameIndex, emailSent, emailAlertResult) => callbacksRef.current.onFallDetected?.(score, frameIndex, emailSent, emailAlertResult),
   });
 
   useEffect(() => {

@@ -62,3 +62,7 @@ export { ErrorChecker } from "./ErrorChecker";
 
 export { useErrorTracker } from "../hooks/useErrorTracker";
 export type { ErrorEntry, ErrorSource, ErrorSeverity } from "../hooks/useErrorTracker";
+
+// Fall Alert Hook
+export { useFallAlert } from "../hooks/useFallAlert";
+export type { EmailAlertResult, FallAlertOptions, UseFallAlertReturn } from "../hooks/useFallAlert";

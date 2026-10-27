@@ -2,6 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export interface EmailAlertResult {
+  sent: boolean;
+  reason: string;
+  timestamp: number;
+  target_email: string;
+  session_id?: string;
+  detection_type?: string;
+}
+
 export interface DetectionResult {
   boxes: number[][];
   scores: number[];
@@ -12,6 +21,8 @@ export interface DetectionResult {
   frame_index: number;
   /** Whether fall alert email was successfully sent by backend. */
   email_sent?: boolean;
+  /** Detailed email alert result from backend. */
+  email_alert_result?: EmailAlertResult;
 }
 
 export interface UseFrameStreamDetectionOptions {
@@ -19,7 +30,7 @@ export interface UseFrameStreamDetectionOptions {
   wsUrl: string;
   onFrameResult?: (result: DetectionResult) => void;
   onFrameError?: (frameIndex: number, error: Error) => void;
-  onFallDetected?: (score: number, frameIndex: number, emailSent: boolean) => void;
+  onFallDetected?: (score: number, frameIndex: number, emailSent: boolean, emailAlertResult?: EmailAlertResult) => void;
   confThreshold?: number;
 }
 
@@ -277,7 +288,12 @@ export function useFrameStreamDetection({
         const now = Date.now();
         if (now - lastFallAlertRef.current >= 2000) {
           lastFallAlertRef.current = now;
-          callbacksRef.current.onFallDetected(Number(result.scores[fallIndex]) || 0, frameIndex, result.email_sent ?? false);
+          callbacksRef.current.onFallDetected(
+            Number(result.scores[fallIndex]) || 0,
+            frameIndex,
+            result.email_sent ?? false,
+            result.email_alert_result
+          );
         }
       }
     };

@@ -9,6 +9,7 @@ import { useToast } from "./ToastProvider";
 import { useErrorTracker } from "../hooks/useErrorTracker";
 import { useVideoFileDetection, type DetectionResult } from "../hooks/useVideoFileDetection";
 import { useVideoCache } from "../hooks/useVideoCache";
+import { useFallAlert } from "../hooks/useFallAlert";
 import { ErrorChecker } from "./ErrorChecker";
 
 interface ChunkedJob {
@@ -69,22 +70,36 @@ export function VideoUploadDetector({
   const [totalChunks, setTotalChunks] = useState(24); // Max chunks
   const [maxResolution, setMaxResolution] = useState(640);
   const [error, setError] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
-  const [isEmailConfigured, setIsEmailConfigured] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Toast notifications
   const { toast } = useToast();
+
+  // Fall alert hook - handles email configuration and fall detection notifications
+  const {
+    isEmailConfigured,
+    email,
+    setEmail,
+    configureEmail,
+    triggerFallAlert,
+    checkEmailConfigured,
+  } = useFallAlert({
+    apiUrl,
+    sessionId,
+    onFallDetected: (score, emailSent) => {
+      // Could add additional logging here if needed
+      console.info("[VideoUploadDetector] Fall alert triggered:", { score, emailSent });
+    },
+  });
 
   // Register session with backend on mount
   useEffect(() => {
     let cancelled = false;
     const registerSession = async () => {
       try {
-        const response = await fetch(`${apiUrl}/api/session/register`, {
+        const response = await fetch(`${apiUrl}/api/session/register?session_id=${encodeURIComponent(sessionId)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId }),
         });
         if (!response.ok && !cancelled) {
           console.warn('[VideoUploadDetector] Failed to register session:', await response.text());
@@ -141,23 +156,16 @@ export function VideoUploadDetector({
   // Initialize hooks
   const { isReady: cacheReady, clearSessionCache, saveSession, getAllSessions, updateSession } = useVideoCache();
 
-  // Track notified fall frames to avoid duplicate toasts
-  const notifiedFallFramesRef = useRef<Set<number>>(new Set());
-
   const {
     isProcessing,
-    isConnected,
     currentFrame,
     totalFrames,
     framesSent,
     framesReceived,
-    progress,
     error: detectionError,
-    results,
     processVideo,
     cancelProcessing,
     reset: resetDetection,
-    setConfThreshold: setDetectionConfThreshold,
   } = useVideoFileDetection({
     wsUrl: `${wsUrl}/ws/detect?session_id=${sessionId}`,
     apiUrl,
@@ -181,26 +189,9 @@ export function VideoUploadDetector({
     onFrameError: (frameIndex, err) => {
       trackError('video-upload', 'error', `Frame ${frameIndex} failed: ${err.message}`, { frameIndex });
     },
-    onFallDetected: (score, frameIndex) => {
-      const timestamp = new Date(Date.now()).toLocaleTimeString();
-
-      // Toast for fall detected
-      toast({
-        type: 'warning',
-        title: '⚠ Fall Detected',
-        message: `Fall detected at ${timestamp} (${(score * 100).toFixed(0)}% confidence)`,
-        duration: 5000,
-      });
-
-      // Toast for email sent (assuming backend sends email on fall detection)
-      if (isEmailConfigured) {
-        toast({
-          type: 'info',
-          title: '📧 Email Alert Sent',
-          message: `Fall alert sent to configured email address`,
-          duration: 4000,
-        });
-      }
+    onFallDetected: (score, _frameIndex, emailSent, emailAlertResult) => {
+      // Use the shared fall alert hook to handle notifications with actual backend result
+      triggerFallAlert(score, emailSent, emailAlertResult);
     },
     onProgress: (p) => {
       setJob(prev => ({ ...prev, progress: p }));
@@ -222,28 +213,6 @@ export function VideoUploadDetector({
       setError(detectionError);
     }
   }, [detectionError]);
-
-  // Update target email on backend (per-session)
-  const updateTargetEmail = useCallback(async (targetEmail: string) => {
-    try {
-      const response = await fetch(`${apiUrl}/api/config?session_id=${sessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_email: targetEmail }),
-      });
-      if (!response.ok) {
-        console.error('[VideoUploadDetector] Failed to update target email:', await response.text());
-        toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
-      } else {
-        console.info('[VideoUploadDetector] Target email updated:', targetEmail);
-        setIsEmailConfigured(true);
-        toast({ type: 'success', title: 'Email Configured', message: 'email configured successfully' });
-      }
-    } catch (err) {
-      console.error('[VideoUploadDetector] Failed to update target email:', err);
-      toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
-    }
-  }, [apiUrl, sessionId, toast]);
 
   // Handle file selection
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -650,7 +619,7 @@ export function VideoUploadDetector({
             <CanvasButton
               variant="secondary"
               size="sm"
-              onClick={() => email.trim() && void updateTargetEmail(email.trim())}
+              onClick={() => email.trim() && void configureEmail(email.trim())}
               disabled={!email.trim()}
             >
               Set Email

@@ -24,12 +24,16 @@ load_dotenv()
 from detector import FallDetector, VideoDetectionResult, decode_base64_image, encode_frame_to_base64
 from connection_manager import connection_manager
 from session_manager import session_manager
+from email_alert_service import EmailAlertService, EmailConfig
 from pydantic import BaseModel
 from typing import List, Optional
 
 
 # Global detector instance
 detector: Optional[FallDetector] = None
+
+# Global email alert service
+email_alert_service: Optional[EmailAlertService] = None
 
 # Job storage for video processing
 video_jobs: Dict[str, VideoDetectionResult] = {}
@@ -114,9 +118,16 @@ async def _cleanup_session_connections(session_id: str) -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global detector
+    global detector, email_alert_service
     model_path = os.getenv("MODEL_PATH", str(Path(__file__).parent / "yolov8n-pose.pt"))
-    detector = FallDetector(model_path=model_path)
+
+    # Initialize email alert service
+    email_config = EmailConfig()
+    email_alert_service = EmailAlertService(email_config)
+    print(f"✓ EmailAlertService initialized (enabled: {email_config.enabled})")
+
+    # Initialize detector with email alert service
+    detector = FallDetector(model_path=model_path, email_alert_service=email_alert_service)
     print(f"✓ FallDetector initialized with model: {model_path}")
     yield
     print("✓ Application shutdown")
@@ -170,6 +181,14 @@ class DetectFrameRequest(BaseModel):
     conf_threshold: Optional[float] = None
 
 
+class EmailAlertResult(BaseModel):
+    """Email alert result."""
+    sent: bool
+    reason: str
+    timestamp: float
+    target_email: str
+
+
 class DetectFrameResponse(BaseModel):
     """Response for single frame detection."""
     boxes: List[List[int]]
@@ -177,6 +196,7 @@ class DetectFrameResponse(BaseModel):
     falls: List[bool]
     timestamp: float
     annotated_image: Optional[str] = None  # base64 JPEG with boxes drawn
+    email_alert_result: Optional[EmailAlertResult] = None
 
 
 class VideoUploadResponse(BaseModel):
@@ -200,6 +220,11 @@ class ConfigUpdateRequest(BaseModel):
     """Request to update detector configuration."""
     conf_threshold: Optional[float] = None
     target_email: Optional[str] = None
+
+
+class SessionCleanupRequest(BaseModel):
+    """Request to clean up a session."""
+    session_id: str
 
 
 # ============================================================================
@@ -258,10 +283,10 @@ async def register_session(session_id: str = None):
 
 
 @app.post("/api/session/cleanup")
-async def cleanup_session(session_id: str):
+async def cleanup_session(request: SessionCleanupRequest):
     """Clean up all connections and the session record."""
-    closed = await _cleanup_session_connections(session_id)
-    return {"session_id": session_id, "connections_closed": closed, "status": "cleaned"}
+    closed = await _cleanup_session_connections(request.session_id)
+    return {"session_id": request.session_id, "connections_closed": closed, "status": "cleaned"}
 
 
 @app.get("/api/session/stats")
@@ -309,10 +334,13 @@ async def websocket_detect(websocket: WebSocket):
 
         if session_id:
             # Ensure session exists (create if not registered via REST yet)
-            session_manager.create_session(session_id)
+            # Use returned session_id in case create_session generates a new one
+            actual_session_id = session_manager.create_session(session_id)
             registered_session = session_manager.register_connection(
-                session_id, assigned_connection_id
+                actual_session_id, assigned_connection_id
             )
+            # Use actual_session_id for subsequent operations
+            session_id = actual_session_id
 
         print(f"WebSocket connected: {assigned_connection_id}")
 
@@ -348,11 +376,22 @@ async def websocket_detect(websocket: WebSocket):
                     await websocket.send_json({"error": "Detector not initialized"})
                     continue
 
+                # Prepare metadata for email alert
+                frame_index = metadata.get("frames_sent", 0)
+                email_metadata = {
+                    "frame_index": frame_index,
+                    "connection_id": assigned_connection_id,
+                    "timestamp": time.time(),
+                }
+
                 result = await asyncio.to_thread(
                     detector.detect_frame,
                     frame,
                     conf_threshold=conf_threshold,
                     target_email=session_email,
+                    session_id=session_id,
+                    detection_type="webcam",
+                    metadata=email_metadata,
                 )
 
                 metadata = connection_manager.get_metadata(assigned_connection_id) or {}
@@ -361,6 +400,16 @@ async def websocket_detect(websocket: WebSocket):
                     frames_received=metadata.get("frames_received", 0) + 1,
                 )
 
+                # Include email alert result in response
+                email_alert_data = None
+                if result.email_alert_result:
+                    email_alert_data = {
+                        "sent": result.email_alert_result.sent,
+                        "reason": result.email_alert_result.reason,
+                        "timestamp": result.email_alert_result.timestamp,
+                        "target_email": result.email_alert_result.target_email,
+                    }
+
                 await websocket.send_json({
                     "boxes": result.boxes,
                     "scores": result.scores,
@@ -368,6 +417,7 @@ async def websocket_detect(websocket: WebSocket):
                     "timestamp": result.timestamp,
                     "connection_id": assigned_connection_id,
                     "email_sent": result.email_sent,
+                    "email_alert_result": email_alert_data,
                 })
             except Exception as exc:
                 try:
@@ -409,18 +459,36 @@ async def detect_frame(request: DetectFrameRequest, session_id: str = Query(None
         )
 
     try:
-        target_email = session_manager.get_session_email(session_id) if session_id else detector.target_email
+        target_email = session_manager.get_session_email(session_id) if session_id else None
         frame = decode_base64_image(request.image)
         if frame is None or frame.size == 0:
             raise HTTPException(status_code=400, detail="Invalid image data")
+
+        # Prepare metadata for email alert
+        email_metadata = {
+            "timestamp": time.time(),
+        }
 
         result = await asyncio.to_thread(
             detector.detect_frame,
             frame,
             conf_threshold=request.conf_threshold,
             target_email=target_email,
+            session_id=session_id,
+            detection_type="frame",
+            metadata=email_metadata,
         )
         annotated = await asyncio.to_thread(detector.draw_detections, frame, result)
+
+        # Include email alert result in response
+        email_alert_data = None
+        if result.email_alert_result:
+            email_alert_data = EmailAlertResult(
+                sent=result.email_alert_result.sent,
+                reason=result.email_alert_result.reason,
+                timestamp=result.email_alert_result.timestamp,
+                target_email=result.email_alert_result.target_email,
+            )
 
         return DetectFrameResponse(
             boxes=result.boxes,
@@ -428,6 +496,7 @@ async def detect_frame(request: DetectFrameRequest, session_id: str = Query(None
             falls=result.falls,
             timestamp=result.timestamp,
             annotated_image=encode_frame_to_base64(annotated),
+            email_alert_result=email_alert_data,
         )
     except HTTPException:
         raise
@@ -481,13 +550,13 @@ async def upload_video(
         with open(input_path, "wb") as output_file:
             output_file.write(content)
 
-        target_email = session_manager.get_session_email(session_id) if session_id else detector.target_email
+        target_email = session_manager.get_session_email(session_id) if session_id else None
         video_jobs[job_id] = VideoDetectionResult(job_id=job_id, status="processing", progress=0.0)
         video_job_slots[job_id] = workload_token
 
         asyncio.create_task(process_video_job(
             job_id, str(input_path), str(output_path), conf_threshold,
-            frame_skip, max_resolution, target_email,
+            frame_skip, max_resolution, target_email, session_id,
         ))
         # The background job now owns this slot.
         workload_token = None
@@ -518,6 +587,7 @@ async def process_video_job(
     frame_skip: int = 3,
     max_resolution: int = 640,
     target_email: Optional[str] = None,
+    session_id: Optional[str] = None,
 ):
     """Process a video job and release its reserved slot on every exit path."""
     job = video_jobs.get(job_id)
@@ -546,6 +616,8 @@ async def process_video_job(
             True,
             target_email,
             conf_threshold,
+            session_id,
+            "video_upload",
         )
 
         job.results = [
@@ -643,7 +715,7 @@ async def detect_chunk(request: ChunkFrameRequest, session_id: str = Query(None)
 
     start_time = time.time()
     try:
-        target_email = session_manager.get_session_email(session_id) if session_id else detector.target_email
+        target_email = session_manager.get_session_email(session_id) if session_id else None
         results = []
         for index, image_b64 in enumerate(request.images):
             frame = decode_base64_image(image_b64)
@@ -652,18 +724,40 @@ async def detect_chunk(request: ChunkFrameRequest, session_id: str = Query(None)
                 results.append({"boxes": [], "scores": [], "falls": [], "timestamp": timestamp})
                 continue
 
+            frame_index = request.frame_indices[index] if index < len(request.frame_indices) else index
+            email_metadata = {
+                "frame_index": frame_index,
+                "chunk_index": request.chunk_index,
+                "timestamp": timestamp,
+            }
+
             result = await asyncio.to_thread(
                 detector.detect_frame,
                 frame,
                 conf_threshold=request.conf_threshold,
                 target_email=target_email,
+                session_id=session_id,
+                detection_type="video_chunk",
+                metadata=email_metadata,
             )
-            results.append({
+
+            frame_result = {
                 "boxes": result.boxes,
                 "scores": result.scores,
                 "falls": result.falls,
                 "timestamp": result.timestamp,
-            })
+            }
+
+            # Include email alert result if available
+            if result.email_alert_result:
+                frame_result["email_alert_result"] = {
+                    "sent": result.email_alert_result.sent,
+                    "reason": result.email_alert_result.reason,
+                    "timestamp": result.email_alert_result.timestamp,
+                    "target_email": result.email_alert_result.target_email,
+                }
+
+            results.append(frame_result)
 
         return ChunkFrameResponse(
             chunk_index=request.chunk_index,
@@ -680,51 +774,89 @@ async def detect_chunk(request: ChunkFrameRequest, session_id: str = Query(None)
 
 @app.post("/api/config")
 async def update_config(request: ConfigUpdateRequest, session_id: str = Query(None)):
-    """Update detector configuration (global or per-session)."""
-    if not detector:
+    """Update detector configuration globally or for one registered session.
+
+    A session's email is stored and returned independently from the global default.
+    This prevents a placeholder/default address from being reported as a session's
+    configured recipient when that session has not saved an email.
+    """
+    if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
-    # Update global threshold if provided
+    # Validate a provided session before attempting to store session-specific config.
+    if session_id and session_id not in session_manager.sessions:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found. Register the session before configuring its email.",
+        )
+
     if request.conf_threshold is not None:
+        if not 0.0 <= request.conf_threshold <= 1.0:
+            raise HTTPException(status_code=422, detail="conf_threshold must be between 0 and 1")
         detector.set_conf_threshold(request.conf_threshold)
 
-    # Update email - if session_id provided, store per-session; otherwise global
     if request.target_email is not None:
-        if session_id:
-            session_manager.update_session_email(session_id, request.target_email)
-        else:
-            detector.set_target_email(request.target_email)
+        normalized_email = request.target_email.strip().lower()
+        if not normalized_email or "@" not in normalized_email or "." not in normalized_email.rsplit("@", 1)[-1]:
+            raise HTTPException(status_code=422, detail="Please provide a valid target_email address")
 
-    # Return current config (session-specific if session_id provided)
-    target_email = detector.target_email
+        if session_id:
+            # Do not silently ignore a failed per-session update.
+            updated = session_manager.update_session_email(session_id, normalized_email)
+            if updated is False:
+                raise HTTPException(status_code=500, detail="Could not save email for this session")
+
+            stored_email = session_manager.get_session_email(session_id)
+            if not stored_email or stored_email.strip().lower() != normalized_email:
+                raise HTTPException(status_code=500, detail="Email was not saved correctly for this session")
+        else:
+            if email_alert_service is None:
+                raise HTTPException(status_code=503, detail="Email alert service not initialized")
+            email_alert_service.config.default_target_email = normalized_email
+
     if session_id:
-        session_email = session_manager.get_session_email(session_id)
-        if session_email:
-            target_email = session_email
+        # Never fall back to the global default for a session-specific response.
+        target_email = session_manager.get_session_email(session_id)
+    else:
+        target_email = (
+            email_alert_service.config.default_target_email
+            if email_alert_service is not None
+            else None
+        )
 
     return {
+        "success": True,
         "conf_threshold": detector.conf_threshold,
         "target_email": target_email,
-        "message": "Configuration updated"
+        "session_id": session_id,
+        "message": "Configuration updated",
     }
 
 
 @app.get("/api/config")
 async def get_config(session_id: str = Query(None)):
-    """Get current detector configuration (global or per-session)."""
-    if not detector:
+    """Get current configuration without mixing global and session email settings."""
+    if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
-    target_email = detector.target_email
     if session_id:
-        session_email = session_manager.get_session_email(session_id)
-        if session_email:
-            target_email = session_email
+        if session_id not in session_manager.sessions:
+            raise HTTPException(status_code=404, detail="Session not found. Register the session first.")
+        # This can legitimately be None when the session has not configured an email.
+        target_email = session_manager.get_session_email(session_id)
+    else:
+        target_email = (
+            email_alert_service.config.default_target_email
+            if email_alert_service is not None
+            else None
+        )
 
     return {
         "conf_threshold": detector.conf_threshold,
         "target_email": target_email,
-        "model_path": detector.model_path
+        "model_path": detector.model_path,
+        "session_id": session_id,
+        "email_configured": bool(target_email),
     }
 
 

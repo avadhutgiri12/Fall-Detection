@@ -8,6 +8,7 @@ import { useFallDetection } from "../hooks/useFallDetection";
 import { useCamera } from "../hooks/useCamera";
 import { useToast } from "./ToastProvider";
 import { useErrorTracker } from "../hooks/useErrorTracker";
+import { useFallAlert, type EmailAlertResult } from "./index";
 import { ErrorChecker } from "./ErrorChecker";
 
 export interface WebcamDetectorProps {
@@ -65,10 +66,27 @@ export function WebcamDetector({
   // Error tracker
   const { errors, trackError, trackWarning, trackInfo, clearErrors: clearErrorTracker, resolveError, copyError, exportErrors } = useErrorTracker();
 
-  // Handle fall detection with toast (cooldown handled by useFallDetection hook)
-  const handleFallDetected = useCallback((score: number) => {
-    toast({ type: 'warning', title: 'Fall Detected!', message: `Alert email sent (${(score * 100).toFixed(0)}% confidence)` });
-  }, [toast]);
+  // Fall alert hook - handles email configuration and fall notifications
+  const {
+    isEmailConfigured,
+    email,
+    setEmail,
+    configureEmail,
+    triggerFallAlert,
+    checkEmailConfigured,
+  } = useFallAlert({
+    apiUrl,
+    sessionId,
+    onFallDetected: (score, emailSent) => {
+      // This callback is called when fall is detected
+      // The hook handles toasts internally
+    },
+  });
+
+  // Handle fall detection with toast (cooldown handled by useFallAlert hook)
+  const handleFallDetected = useCallback((score: number, frameIndex: number, emailSent: boolean, emailAlertResult?: EmailAlertResult) => {
+    triggerFallAlert(score, emailSent, emailAlertResult);
+  }, [triggerFallAlert]);
 
   // Use the detection hook for WebSocket and frame capture logic
   const {
@@ -130,8 +148,6 @@ export function WebcamDetector({
   const [showSettings, setShowSettings] = useState(false);
   const [showErrorPanel, setShowErrorPanel] = useState(false);
   const [combinedError, setCombinedError] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
-  const [isEmailConfigured, setIsEmailConfigured] = useState(false);
   const overlayRef = useRef<HTMLCanvasElement>(null);
 
   // Combine errors from both hooks
@@ -144,10 +160,9 @@ export function WebcamDetector({
     let cancelled = false;
     const registerSession = async () => {
       try {
-        const response = await fetch(`${apiUrl}/api/session/register`, {
+        const response = await fetch(`${apiUrl}/api/session/register?session_id=${encodeURIComponent(sessionId)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId }),
         });
         if (!response.ok && !cancelled) {
           console.warn('[WebcamDetector] Failed to register session:', await response.text());
@@ -194,28 +209,6 @@ export function WebcamDetector({
       cancelled = true;
     };
   }, [apiUrl, sessionId, initialConfThreshold, setConfThreshold]);
-
-  // Update target email on backend (per-session)
-  const updateTargetEmail = useCallback(async (targetEmail: string) => {
-    try {
-      const response = await fetch(`${apiUrl}/api/config?session_id=${sessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_email: targetEmail }),
-      });
-      if (!response.ok) {
-        console.error('[WebcamDetector] Failed to update target email:', await response.text());
-        toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
-      } else {
-        console.info('[WebcamDetector] Target email updated:', targetEmail);
-        setIsEmailConfigured(true);
-        toast({ type: 'success', title: 'Email Configured', message: 'email configured successfully' });
-      }
-    } catch (err) {
-      console.error('[WebcamDetector] Failed to update target email:', err);
-      toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
-    }
-  }, [apiUrl, sessionId, toast]);
 
   // Draw detections on overlay canvas
   useEffect(() => {
@@ -478,7 +471,7 @@ export function WebcamDetector({
                 <CanvasButton
                   variant="secondary"
                   size="sm"
-                  onClick={() => email.trim() && void updateTargetEmail(email.trim())}
+                  onClick={() => email.trim() && void configureEmail(email.trim())}
                   disabled={!isCameraOn || !email.trim()}
                 >
                   Set Email

@@ -17,13 +17,13 @@ class SessionManager:
         self.session_connections: Dict[str, Set[str]] = {}  # session_id -> set of connection_ids
 
     def create_session(self, session_id: Optional[str] = None) -> str:
-        """Create a new session."""
+        """Create a new session or return existing session_id if it already exists."""
         if session_id is None:
             session_id = str(uuid.uuid4())[:12]
 
-        # Ensure unique session_id
-        while session_id in self.sessions:
-            session_id = str(uuid.uuid4())[:12]
+        # If session already exists, return it (get_or_create behavior)
+        if session_id in self.sessions:
+            return session_id
 
         self.sessions[session_id] = {
             "created_at": time.time(),

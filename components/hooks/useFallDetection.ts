@@ -1,17 +1,17 @@
 "use client";
 
-import { useRef, useCallback } from "react";
-import { useFrameStreamDetection, type DetectionResult } from "./useFrameStreamDetection";
+import { useCallback, useEffect, useRef } from "react";
+import {
+  useFrameStreamDetection,
+  type DetectionResult,
+} from "./useFrameStreamDetection";
 
 export interface UseFallDetectionOptions {
-  /** WebSocket endpoint that accepts JSON { image, conf_threshold }. */
   wsUrl: string;
-  /** Callback when a fall is detected. */
-  onFallDetected?: (score: number) => void;
+  onFallDetected?: (score: number, frameIndex: number, emailSent: boolean) => void;
 }
 
 export interface UseFallDetectionReturn {
-  // State
   isDetecting: boolean;
   isConnected: boolean;
   detections: DetectionResult | null;
@@ -21,8 +21,6 @@ export interface UseFallDetectionReturn {
   lastReceived: number | null;
   wsStatus: "CLOSED" | "CONNECTING" | "OPEN" | "CLOSING";
   confThreshold: number;
-
-  // Controls
   startDetection: (video: HTMLVideoElement, confThreshold?: number) => void;
   stopDetection: () => void;
   setConfThreshold: (value: number) => void;
@@ -32,14 +30,12 @@ export function useFallDetection({
   wsUrl,
   onFallDetected,
 }: UseFallDetectionOptions): UseFallDetectionReturn {
-  // Use the shared core for WebSocket management
   const {
     isDetecting,
     isConnected,
     detections,
     error,
     framesSent,
-    framesReceived,
     lastSent,
     lastReceived,
     wsStatus,
@@ -51,116 +47,179 @@ export function useFallDetection({
   } = useFrameStreamDetection({
     wsUrl,
     onFallDetected: onFallDetected
-      ? (score, frameIndex) => onFallDetected(score)
+      ? (score: number, frameIndex: number, emailSent: boolean) => onFallDetected(score, frameIndex, emailSent)
       : undefined,
     confThreshold: 0.6,
   });
 
-  // Refs for video/canvas (webcam-specific)
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
-  const lastCaptureTimeRef = useRef(0);
-  const framePendingRef = useRef(false);
 
-  // Frame capture loop (webcam-specific)
+  // These refs are intentionally used inside requestAnimationFrame callbacks:
+  // React state updates are asynchronous and can otherwise leave stale values.
+  const runningRef = useRef(false);
+  const connectedRef = useRef(false);
+  const frameIndexRef = useRef(0);
+  const lastCaptureTimeRef = useRef(0);
+  const encodingRef = useRef(false);
+  const captureFrameRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    connectedRef.current = isConnected;
+  }, [isConnected]);
+
   const captureFrame = useCallback(() => {
-    if (!isDetecting) {
+    if (!runningRef.current) {
       animationRef.current = null;
       return;
     }
 
-    const currentVideo = videoRef.current;
+    // Keep the loop alive while the WebSocket is connecting or reconnecting.
+    animationRef.current = requestAnimationFrame(() => captureFrameRef.current());
+
+    const video = videoRef.current;
     const canvas = canvasRef.current;
-    // Always schedule the next tick while detection is active
-    animationRef.current = requestAnimationFrame(captureFrame);
 
-    if (!currentVideo || !canvas || currentVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
-    if (!currentVideo.videoWidth || !currentVideo.videoHeight) return;
+    if (!video || !canvas) return;
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    if (!video.videoWidth || !video.videoHeight) return;
+    if (!connectedRef.current || encodingRef.current) return;
 
-    if (canvas.width !== currentVideo.videoWidth || canvas.height !== currentVideo.videoHeight) {
-      canvas.width = currentVideo.videoWidth;
-      canvas.height = currentVideo.videoHeight;
-    }
-
-    // Limit traffic to about 10 frames/second and allow only one async encode/send at a time.
     const now = performance.now();
-    if (now - lastCaptureTimeRef.current < 100 || framePendingRef.current) return;
+    if (now - lastCaptureTimeRef.current < 100) return; // about 10 FPS
     lastCaptureTimeRef.current = now;
 
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
     }
 
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
     try {
-      context.drawImage(currentVideo, 0, 0, canvas.width, canvas.height);
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
     } catch (err) {
       console.error("[useFallDetection] Could not draw video frame:", err);
       return;
     }
 
-    framePendingRef.current = true;
+    encodingRef.current = true;
+
     canvas.toBlob((blob) => {
       if (!blob) {
-        framePendingRef.current = false;
+        encodingRef.current = false;
         console.error("[useFallDetection] Browser failed to encode a JPEG frame.");
         return;
       }
 
       const reader = new FileReader();
+
       reader.onerror = () => {
-        framePendingRef.current = false;
+        encodingRef.current = false;
         console.error("[useFallDetection] Failed to read encoded frame.");
       };
-      reader.onload = () => {
-        framePendingRef.current = false;
-        if (!isDetecting || typeof reader.result !== "string") return;
 
-        // Send frame via shared core
-        // Use frameCount as frame_index for ordering
-        sendFrame(reader.result, framesSent, Date.now() / 1000);
+      reader.onload = () => {
+        encodingRef.current = false;
+
+        if (!runningRef.current || typeof reader.result !== "string") return;
+        if (!connectedRef.current) return;
+
+        const frameIndex = frameIndexRef.current;
+        const sent = sendFrame(reader.result, frameIndex, Date.now() / 1000);
+
+        // sendFrame returns true only if ws.send() actually succeeded.
+        // If the previous response is still pending, a later frame retries.
+        if (sent) {
+          frameIndexRef.current += 1;
+        } else {
+          console.debug("[useFallDetection] Frame was not sent; retrying on a later frame.");
+        }
       };
+
       reader.readAsDataURL(blob);
     }, "image/jpeg", 0.8);
-  }, [isDetecting, framesSent, sendFrame]);
+  }, [sendFrame]);
 
-  const startDetection = useCallback((video: HTMLVideoElement, confThreshold?: number) => {
-    if (!video) {
-      return;
-    }
-    if (isDetecting) return;
-    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) {
-      return;
-    }
+  useEffect(() => {
+    captureFrameRef.current = captureFrame;
+  }, [captureFrame]);
 
-    // Store video reference for capture loop
-    videoRef.current = video;
+  const startDetection = useCallback(
+    (video: HTMLVideoElement, nextThreshold?: number) => {
+      if (!video) {
+        console.error("[useFallDetection] Cannot start: video element is missing.");
+        return;
+      }
+      if (runningRef.current) return;
 
-    // Create offscreen canvas for frame capture
-    if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
-    canvasRef.current.width = video.videoWidth;
-    canvasRef.current.height = video.videoHeight;
+      if (
+        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+        !video.videoWidth ||
+        !video.videoHeight
+      ) {
+        console.error("[useFallDetection] Camera video is not ready.", {
+          readyState: video.readyState,
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+        });
+        return;
+      }
 
-    coreStartDetection(confThreshold);
-    captureFrame();
-  }, [isDetecting, coreStartDetection, captureFrame]);
+      videoRef.current = video;
+      if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
+      canvasRef.current.width = video.videoWidth;
+      canvasRef.current.height = video.videoHeight;
+
+      frameIndexRef.current = 0;
+      lastCaptureTimeRef.current = 0;
+      encodingRef.current = false;
+      runningRef.current = true;
+
+      // This opens the WebSocket. Frame capture waits until isConnected is true.
+      coreStartDetection(nextThreshold);
+
+      if (animationRef.current !== null) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      animationRef.current = requestAnimationFrame(() => captureFrameRef.current());
+
+      console.info("[useFallDetection] Detection started; waiting for WebSocket.");
+    },
+    [coreStartDetection]
+  );
 
   const stopDetection = useCallback(() => {
+    runningRef.current = false;
+    connectedRef.current = false;
+    encodingRef.current = false;
+
     if (animationRef.current !== null) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
     }
-    framePendingRef.current = false;
+
     coreStopDetection();
+    console.info("[useFallDetection] Detection stopped.");
   }, [coreStopDetection]);
 
-  const setConfThreshold = useCallback((value: number) => {
-    coreSetConfThreshold(value);
-  }, [coreSetConfThreshold]);
+  const setConfThreshold = useCallback(
+    (value: number) => coreSetConfThreshold(value),
+    [coreSetConfThreshold]
+  );
+
+  useEffect(() => {
+    return () => {
+      runningRef.current = false;
+      if (animationRef.current !== null) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, []);
 
   return {
-    // State
     isDetecting,
     isConnected,
     detections,
@@ -170,8 +229,6 @@ export function useFallDetection({
     lastReceived,
     wsStatus,
     confThreshold,
-
-    // Controls
     startDetection,
     stopDetection,
     setConfThreshold,
