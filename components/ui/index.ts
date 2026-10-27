@@ -33,6 +33,12 @@ export type { UseFallDetectionReturn, UseFallDetectionOptions } from "../hooks/u
 export { useCamera } from "../hooks/useCamera";
 export type { UseCameraReturn, UseCameraOptions } from "../hooks/useCamera";
 
+export { useVideoChunking } from "../hooks/useVideoChunking";
+export type { ChunkConfig, VideoFrame, ChunkResult, UseVideoChunkingOptions, UseVideoChunkingReturn } from "../hooks/useVideoChunking";
+
+export { useVideoCache } from "../hooks/useVideoCache";
+export type { CachedVideoChunk, CachedVideoSession } from "../hooks/useVideoCache";
+
 // Buttons
 export { CanvasButton } from "./CanvasButton";
 export type { CanvasButtonProps } from "./CanvasButton";
@@ -41,3 +47,9 @@ export type { CanvasButtonProps } from "./CanvasButton";
 export { ToastProvider, useToast } from "./ToastProvider";
 export { Toast } from "./Toast";
 export type { ToastType } from "./Toast";
+
+// Error Checker
+export { ErrorChecker } from "./ErrorChecker";
+
+export { useErrorTracker } from "../hooks/useErrorTracker";
+export type { ErrorEntry, ErrorSource, ErrorSeverity } from "../hooks/useErrorTracker";

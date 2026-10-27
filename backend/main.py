@@ -21,6 +21,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from detector import FallDetector, VideoDetectionResult, decode_base64_image, encode_frame_to_base64
+from connection_manager import connection_manager
+from session_manager import session_manager
+from pydantic import BaseModel
+from typing import List, Optional
 
 
 # Global detector instance
@@ -122,6 +126,26 @@ class ConfigUpdateRequest(BaseModel):
 
 
 # ============================================================================
+# Request/Response Models for Chunk Detection
+# ============================================================================
+
+class ChunkFrameRequest(BaseModel):
+    """Request for chunk detection via REST."""
+    images: List[str]  # List of base64 encoded JPEGs
+    conf_threshold: Optional[float] = None
+    chunk_index: int
+    frame_indices: List[int]
+    timestamps: List[float]
+
+
+class ChunkFrameResponse(BaseModel):
+    """Response for chunk detection."""
+    chunk_index: int
+    results: List[dict]  # Each result: {boxes, scores, falls, timestamp}
+    processing_time: float
+
+
+# ============================================================================
 # Health Check
 # ============================================================================
 
@@ -131,8 +155,35 @@ async def health_check():
     return {
         "status": "healthy",
         "model_loaded": detector is not None,
-        "active_jobs": len(video_jobs)
+        "active_jobs": len(video_jobs),
+        "ws_connections": connection_manager.get_stats()
     }
+
+
+@app.get("/api/ws/stats")
+async def ws_stats():
+    """Get WebSocket connection statistics."""
+    return connection_manager.get_stats()
+
+
+@app.post("/api/session/register")
+async def register_session(session_id: str = None):
+    """Register a new session or get existing session."""
+    sid = session_manager.create_session(session_id)
+    return {"session_id": sid, "status": "registered"}
+
+
+@app.post("/api/session/cleanup")
+async def cleanup_session(session_id: str):
+    """Clean up all connections for a session."""
+    closed = session_manager.cleanup_session(session_id)
+    return {"session_id": session_id, "connections_closed": closed, "status": "cleaned"}
+
+
+@app.get("/api/session/stats")
+async def session_stats():
+    """Get session statistics."""
+    return session_manager.get_stats()
 
 
 # ============================================================================
@@ -146,9 +197,27 @@ async def websocket_detect(websocket: WebSocket):
 
     Client sends: {"image": "base64_jpeg", "conf_threshold": 0.6}
     Server responds: {"boxes": [...], "scores": [...], "falls": [...], "timestamp": 1234567890}
+
+    Query Parameters:
+    - connection_id: Optional client-provided connection ID
+    - session_id: Optional session ID for tracking
     """
+    # Accept connection with connection manager
+    connection_id = websocket.query_params.get("connection_id")
+    session_id = websocket.query_params.get("session_id")
+    success, assigned_connection_id = await connection_manager.connect(websocket, connection_id)
+
+    if not success:
+        await websocket.close(code=1013, reason="Maximum connections reached (10)")
+        return
+
     await websocket.accept()
-    print("✓ WebSocket client connected")
+
+    # Register with session if provided
+    if session_id:
+        session_manager.register_connection(session_id, assigned_connection_id)
+
+    print(f"✓ WebSocket client connected: {assigned_connection_id} (Total: {len(connection_manager.active_connections)}/{connection_manager.max_connections})")
 
     try:
         while True:
@@ -164,9 +233,10 @@ async def websocket_detect(websocket: WebSocket):
                 await websocket.send_json({"error": "Missing 'image' field"})
                 continue
 
-            # Update confidence threshold if provided
+            # Update confidence threshold if provided (per-connection)
             if conf_threshold is not None and detector:
                 detector.set_conf_threshold(conf_threshold)
+                connection_manager.update_metadata(assigned_connection_id, conf_threshold=conf_threshold)
 
             # Decode and process frame
             try:
@@ -175,16 +245,23 @@ async def websocket_detect(websocket: WebSocket):
                     await websocket.send_json({"error": "Invalid image data"})
                     continue
 
+                # Update frames sent counter
+                connection_manager.update_metadata(assigned_connection_id, frames_sent=connection_manager.connection_metadata[assigned_connection_id]["frames_sent"] + 1)
+
                 # Run detection
                 if detector:
                     result = detector.detect_frame(frame)
+
+                    # Update frames received counter
+                    connection_manager.update_metadata(assigned_connection_id, frames_received=connection_manager.connection_metadata[assigned_connection_id]["frames_received"] + 1)
 
                     # Send results back
                     await websocket.send_json({
                         "boxes": result.boxes,
                         "scores": result.scores,
                         "falls": result.falls,
-                        "timestamp": result.timestamp
+                        "timestamp": result.timestamp,
+                        "connection_id": assigned_connection_id
                     })
                 else:
                     await websocket.send_json({"error": "Detector not initialized"})
@@ -193,13 +270,19 @@ async def websocket_detect(websocket: WebSocket):
                 await websocket.send_json({"error": f"Processing error: {str(e)}"})
 
     except WebSocketDisconnect:
-        print("✓ WebSocket client disconnected")
+        print(f"✓ WebSocket client disconnected: {assigned_connection_id}")
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        print(f"WebSocket error for {assigned_connection_id}: {e}")
         try:
             await websocket.close()
         except:
             pass
+    finally:
+        # Clean up connection
+        if session_id:
+            session_manager.unregister_connection(session_id, assigned_connection_id)
+        connection_manager.disconnect(assigned_connection_id)
+        print(f"✓ WebSocket cleaned up: {assigned_connection_id} (Remaining: {len(connection_manager.active_connections)})")
 
 
 # ============================================================================
@@ -402,6 +485,58 @@ async def get_config():
         "target_email": detector.target_email,
         "model_path": detector.model_path
     }
+
+
+# ============================================================================
+# REST: Chunk Detection (for chunked video processing)
+# ============================================================================
+
+@app.post("/api/detect/chunk", response_model=ChunkFrameResponse)
+async def detect_chunk(request: ChunkFrameRequest):
+    """
+    Detect falls in multiple frames (chunk) via REST.
+    Used for chunked video processing - client sends 10 frames at a time.
+    """
+    if not detector:
+        raise HTTPException(status_code=503, detail="Detector not initialized")
+
+    if request.conf_threshold is not None:
+        detector.set_conf_threshold(request.conf_threshold)
+
+    import time
+    start_time = time.time()
+
+    try:
+        results = []
+        for i, image_b64 in enumerate(request.images):
+            frame = decode_base64_image(image_b64)
+            if frame is None or frame.size == 0:
+                results.append({
+                    "boxes": [],
+                    "scores": [],
+                    "falls": [],
+                    "timestamp": request.timestamps[i] if i < len(request.timestamps) else time.time()
+                })
+                continue
+
+            result = detector.detect_frame(frame)
+
+            results.append({
+                "boxes": result.boxes,
+                "scores": result.scores,
+                "falls": result.falls,
+                "timestamp": result.timestamp
+            })
+
+        processing_time = time.time() - start_time
+
+        return ChunkFrameResponse(
+            chunk_index=request.chunk_index,
+            results=results,
+            processing_time=processing_time
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chunk detection failed: {str(e)}")
 
 
 @app.post("/api/config")
