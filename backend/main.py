@@ -233,17 +233,10 @@ async def websocket_detect(websocket: WebSocket):
                 await websocket.send_json({"error": "Missing 'image' field"})
                 continue
 
-<<<<<<< HEAD
-            # Update confidence threshold if provided (per-connection)
-            if conf_threshold is not None and detector:
-                detector.set_conf_threshold(conf_threshold)
-                connection_manager.update_metadata(assigned_connection_id, conf_threshold=conf_threshold)
-=======
             # Get per-session email (if session_id provided)
             session_email = None
             if session_id:
                 session_email = session_manager.get_session_email(session_id)
->>>>>>> fixing-frame-issue
 
             # Decode and process frame
             try:
@@ -255,11 +248,7 @@ async def websocket_detect(websocket: WebSocket):
                 # Update frames sent counter
                 connection_manager.update_metadata(assigned_connection_id, frames_sent=connection_manager.connection_metadata[assigned_connection_id]["frames_sent"] + 1)
 
-<<<<<<< HEAD
-                # Run detection
-=======
                 # Run detection with per-session config (stateless per-call)
->>>>>>> fixing-frame-issue
                 if detector:
                     result = detector.detect_frame(
                         frame,
@@ -526,63 +515,11 @@ async def get_config():
 # ============================================================================
 
 @app.post("/api/detect/chunk", response_model=ChunkFrameResponse)
-<<<<<<< HEAD
-async def detect_chunk(request: ChunkFrameRequest):
-=======
 async def detect_chunk(request: ChunkFrameRequest, session_id: str = Query(None)):
->>>>>>> fixing-frame-issue
     """
     Detect falls in multiple frames (chunk) via REST.
     Used for chunked video processing - client sends 10 frames at a time.
     """
-<<<<<<< HEAD
-    if not detector:
-        raise HTTPException(status_code=503, detail="Detector not initialized")
-
-    if request.conf_threshold is not None:
-        detector.set_conf_threshold(request.conf_threshold)
-
-    import time
-    start_time = time.time()
-
-    try:
-        results = []
-        for i, image_b64 in enumerate(request.images):
-            frame = decode_base64_image(image_b64)
-            if frame is None or frame.size == 0:
-                results.append({
-                    "boxes": [],
-                    "scores": [],
-                    "falls": [],
-                    "timestamp": request.timestamps[i] if i < len(request.timestamps) else time.time()
-                })
-                continue
-
-            result = detector.detect_frame(frame)
-
-            results.append({
-                "boxes": result.boxes,
-                "scores": result.scores,
-                "falls": result.falls,
-                "timestamp": result.timestamp
-            })
-
-        processing_time = time.time() - start_time
-
-        return ChunkFrameResponse(
-            chunk_index=request.chunk_index,
-            results=results,
-            processing_time=processing_time
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chunk detection failed: {str(e)}")
-
-
-@app.post("/api/config")
-async def update_config(request: ConfigUpdateRequest):
-    """Update detector configuration."""
-=======
->>>>>>> fixing-frame-issue
     if not detector:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
