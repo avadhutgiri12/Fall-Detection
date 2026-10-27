@@ -10,6 +10,8 @@ export interface DetectionResult {
   timestamp: number;
   /** Frame sequence number for ordering. */
   frame_index: number;
+  /** Whether fall alert email was successfully sent by backend. */
+  email_sent?: boolean;
 }
 
 export interface UseFrameStreamDetectionOptions {
@@ -17,7 +19,7 @@ export interface UseFrameStreamDetectionOptions {
   wsUrl: string;
   onFrameResult?: (result: DetectionResult) => void;
   onFrameError?: (frameIndex: number, error: Error) => void;
-  onFallDetected?: (score: number, frameIndex: number) => void;
+  onFallDetected?: (score: number, frameIndex: number, emailSent: boolean) => void;
   confThreshold?: number;
 }
 
@@ -241,6 +243,7 @@ export function useFrameStreamDetection({
       const boxes = Array.isArray(payload?.boxes) ? payload.boxes : [];
       const scores = Array.isArray(payload?.scores) ? payload.scores.map(Number) : [];
       const falls = Array.isArray(payload?.falls) ? payload.falls.map(Boolean) : [];
+      const emailSent = Boolean(payload?.email_sent);
       const rawTimestamp = payload?.timestamp == null ? Number.NaN : Number(payload.timestamp);
       const timestamp = Number.isFinite(rawTimestamp)
         ? (rawTimestamp > 1e12 ? rawTimestamp / 1000 : rawTimestamp)
@@ -257,6 +260,7 @@ export function useFrameStreamDetection({
         falls,
         timestamp,
         frame_index: frameIndex,
+        email_sent: emailSent,
       };
 
       if (mountedRef.current) {
@@ -273,7 +277,7 @@ export function useFrameStreamDetection({
         const now = Date.now();
         if (now - lastFallAlertRef.current >= 2000) {
           lastFallAlertRef.current = now;
-          callbacksRef.current.onFallDetected(Number(result.scores[fallIndex]) || 0, frameIndex);
+          callbacksRef.current.onFallDetected(Number(result.scores[fallIndex]) || 0, frameIndex, result.email_sent ?? false);
         }
       }
     };

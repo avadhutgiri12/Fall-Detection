@@ -308,6 +308,8 @@ async def websocket_detect(websocket: WebSocket):
             return
 
         if session_id:
+            # Ensure session exists (create if not registered via REST yet)
+            session_manager.create_session(session_id)
             registered_session = session_manager.register_connection(
                 session_id, assigned_connection_id
             )
@@ -365,6 +367,7 @@ async def websocket_detect(websocket: WebSocket):
                     "falls": result.falls,
                     "timestamp": result.timestamp,
                     "connection_id": assigned_connection_id,
+                    "email_sent": result.email_sent,
                 })
             except Exception as exc:
                 try:

@@ -27,6 +27,7 @@ class DetectionResult:
     scores: List[float]
     falls: List[bool]
     timestamp: float
+    email_sent: bool = False  # Whether fall alert email was successfully sent
 
 
 @dataclass
@@ -89,7 +90,7 @@ class FallDetector:
             target_email: Email to send fall alerts to (uses instance default if None)
 
         Returns:
-            DetectionResult with boxes, scores, fall flags
+            DetectionResult with boxes, scores, fall flags, and email_sent status
         """
         # Use provided threshold or fall back to instance default
         threshold = conf_threshold if conf_threshold is not None else self.conf_threshold
@@ -99,6 +100,7 @@ class FallDetector:
         boxes = []
         scores = []
         falls = []
+        email_sent = False
 
         for r in results:
             if r.boxes:
@@ -116,22 +118,26 @@ class FallDetector:
 
                     # Send alert if fall detected (rate limited) - use provided email or instance default
                     if is_fall:
-                        self._maybe_send_alert(score, target_email or self.target_email)
+                        email_sent = self._maybe_send_alert(score, target_email or self.target_email)
 
         return DetectionResult(
             boxes=boxes,
             scores=scores,
             falls=falls,
-            timestamp=time.time()
+            timestamp=time.time(),
+            email_sent=email_sent
         )
 
-    def _maybe_send_alert(self, score: float, target_email: Optional[str] = None):
-        """Send email alert with rate limiting (1 per minute)."""
+    def _maybe_send_alert(self, score: float, target_email: Optional[str] = None) -> bool:
+        """Send email alert with rate limiting (1 per minute). Returns True if email was sent."""
         with self._alert_lock:
             now = time.time()
             if now - self._last_alert_time > 60:
-                if self._send_alert(score, target_email or self.target_email):
+                sent = self._send_alert(score, target_email or self.target_email)
+                if sent:
                     self._last_alert_time = now
+                return sent
+            return False
 
     def _send_alert(self, score: float, target_email: str) -> bool:
         """Send fall alert email to specified address."""
