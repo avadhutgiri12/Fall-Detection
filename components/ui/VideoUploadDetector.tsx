@@ -221,10 +221,14 @@ export function VideoUploadDetector({
     }
   }, [chunkingError]);
 
+<<<<<<< HEAD
   // Update target email on backend
+=======
+  // Update target email on backend (per-session)
+>>>>>>> fixing-frame-issue
   const updateTargetEmail = useCallback(async (targetEmail: string) => {
     try {
-      const response = await fetch(`${apiUrl}/api/config`, {
+      const response = await fetch(`${apiUrl}/api/config?session_id=${sessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_email: targetEmail }),
@@ -241,7 +245,11 @@ export function VideoUploadDetector({
       console.error('[VideoUploadDetector] Failed to update target email:', err);
       toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
     }
+<<<<<<< HEAD
   }, [apiUrl, toast]);
+=======
+  }, [apiUrl, sessionId, toast]);
+>>>>>>> fixing-frame-issue
 
   // Handle file selection
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

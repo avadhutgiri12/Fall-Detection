@@ -72,17 +72,28 @@ class FallDetector:
         """Update confidence threshold."""
         self.conf_threshold = max(0.0, min(1.0, threshold))
 
-    def detect_frame(self, frame: np.ndarray, half: bool = False) -> DetectionResult:
+    def detect_frame(
+        self,
+        frame: np.ndarray,
+        half: bool = False,
+        conf_threshold: Optional[float] = None,
+        target_email: Optional[str] = None
+    ) -> DetectionResult:
         """
         Run detection on a single frame.
 
         Args:
             frame: BGR image as numpy array
             half: Use FP16 half-precision inference (reduces memory usage)
+            conf_threshold: Override confidence threshold for this frame (uses instance default if None)
+            target_email: Email to send fall alerts to (uses instance default if None)
 
         Returns:
             DetectionResult with boxes, scores, fall flags
         """
+        # Use provided threshold or fall back to instance default
+        threshold = conf_threshold if conf_threshold is not None else self.conf_threshold
+
         results = self.model(frame, verbose=False, half=half)
 
         boxes = []
@@ -97,15 +108,15 @@ class FallDetector:
                     w, h = x2 - x1, y2 - y1
 
                     # Fall logic: horizontal box (w > h) with sufficient confidence
-                    is_fall = score > self.conf_threshold and w > h
+                    is_fall = score > threshold and w > h
 
                     boxes.append([x1, y1, x2, y2])
                     scores.append(score)
                     falls.append(is_fall)
 
-                    # Send alert if fall detected (rate limited)
+                    # Send alert if fall detected (rate limited) - use provided email or instance default
                     if is_fall:
-                        self._maybe_send_alert(score)
+                        self._maybe_send_alert(score, target_email or self.target_email)
 
         return DetectionResult(
             boxes=boxes,
@@ -114,21 +125,21 @@ class FallDetector:
             timestamp=time.time()
         )
 
-    def _maybe_send_alert(self, score: float):
+    def _maybe_send_alert(self, score: float, target_email: Optional[str] = None):
         """Send email alert with rate limiting (1 per minute)."""
         with self._alert_lock:
             now = time.time()
             if now - self._last_alert_time > 60:
-                if self._send_alert(score):
+                if self._send_alert(score, target_email or self.target_email):
                     self._last_alert_time = now
 
-    def _send_alert(self, score: float) -> bool:
-        """Send fall alert email."""
+    def _send_alert(self, score: float, target_email: str) -> bool:
+        """Send fall alert email to specified address."""
         try:
             msg = EmailMessage()
             msg['Subject'] = "Fall Detected ⚠️🚨"
             msg['From'] = self.sender_email
-            msg['To'] = self.target_email
+            msg['To'] = target_email
             msg.set_content(f"System detected a fall with {score:.2%} confidence. Immediate check required.")
 
             smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -145,7 +156,8 @@ class FallDetector:
                     smtp.login(self.sender_email, self.sender_pass)
                     smtp.send_message(msg)
             return True
-        except Exception:
+        except Exception as e:
+            print(f"[FallDetector] Email send failed: {e}")
             return False
 
     def set_target_email(self, email: str):
@@ -172,7 +184,9 @@ class FallDetector:
         progress_callback=None,
         frame_skip: int = 1,
         max_resolution: int = 640,
-        half: bool = True
+        half: bool = True,
+        target_email: Optional[str] = None,
+        conf_threshold: Optional[float] = None
     ) -> List[DetectionResult]:
         """
         Process entire video file and save annotated output.
@@ -184,6 +198,8 @@ class FallDetector:
             frame_skip: Process every Nth frame (1 = all frames, 2 = every other, etc.)
             max_resolution: Max width/height for inference (frames resized if larger)
             half: Use FP16 half-precision inference (reduces memory usage ~50%)
+            target_email: Email to send fall alerts to (uses instance default if None)
+            conf_threshold: Override confidence threshold (uses instance default if None)
 
         Returns:
             List of DetectionResult per frame (only for processed frames)
@@ -234,7 +250,12 @@ class FallDetector:
                     inference_frame = cv2.resize(frame, (out_width, out_height))
 
                 # Run detection with FP16 for memory efficiency
-                result = self.detect_frame(inference_frame, half=half)
+                result = self.detect_frame(
+                    inference_frame,
+                    half=half,
+                    conf_threshold=conf_threshold,
+                    target_email=target_email
+                )
                 all_results.append(result)
 
                 # Draw detections on the inference frame (which matches output size)

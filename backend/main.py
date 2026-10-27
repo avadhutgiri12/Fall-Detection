@@ -233,10 +233,17 @@ async def websocket_detect(websocket: WebSocket):
                 await websocket.send_json({"error": "Missing 'image' field"})
                 continue
 
+<<<<<<< HEAD
             # Update confidence threshold if provided (per-connection)
             if conf_threshold is not None and detector:
                 detector.set_conf_threshold(conf_threshold)
                 connection_manager.update_metadata(assigned_connection_id, conf_threshold=conf_threshold)
+=======
+            # Get per-session email (if session_id provided)
+            session_email = None
+            if session_id:
+                session_email = session_manager.get_session_email(session_id)
+>>>>>>> fixing-frame-issue
 
             # Decode and process frame
             try:
@@ -248,9 +255,20 @@ async def websocket_detect(websocket: WebSocket):
                 # Update frames sent counter
                 connection_manager.update_metadata(assigned_connection_id, frames_sent=connection_manager.connection_metadata[assigned_connection_id]["frames_sent"] + 1)
 
+<<<<<<< HEAD
                 # Run detection
+=======
+                # Run detection with per-session config (stateless per-call)
+>>>>>>> fixing-frame-issue
                 if detector:
-                    result = detector.detect_frame(frame)
+                    result = detector.detect_frame(
+                        frame,
+                        conf_threshold=conf_threshold,
+                        target_email=session_email
+                    )
+
+                    # Update frames received counter
+                    connection_manager.update_metadata(assigned_connection_id, frames_received=connection_manager.connection_metadata[assigned_connection_id]["frames_received"] + 1)
 
                     # Update frames received counter
                     connection_manager.update_metadata(assigned_connection_id, frames_received=connection_manager.connection_metadata[assigned_connection_id]["frames_received"] + 1)
@@ -290,7 +308,7 @@ async def websocket_detect(websocket: WebSocket):
 # ============================================================================
 
 @app.post("/api/detect/frame", response_model=DetectFrameResponse)
-async def detect_frame(request: DetectFrameRequest):
+async def detect_frame(request: DetectFrameRequest, session_id: str = Query(None)):
     """
     Detect falls in a single frame via REST.
     Use WebSocket (/ws/detect) for real-time streaming.
@@ -298,15 +316,23 @@ async def detect_frame(request: DetectFrameRequest):
     if not detector:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
-    if request.conf_threshold is not None:
-        detector.set_conf_threshold(request.conf_threshold)
+    # Get per-session email if session_id provided
+    target_email = None
+    if session_id:
+        target_email = session_manager.get_session_email(session_id)
+    else:
+        target_email = detector.target_email
 
     try:
         frame = decode_base64_image(request.image)
         if frame is None or frame.size == 0:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
-        result = detector.detect_frame(frame)
+        result = detector.detect_frame(
+            frame,
+            conf_threshold=request.conf_threshold,
+            target_email=target_email
+        )
 
         # Optionally return annotated image
         annotated = detector.draw_detections(frame, result)
@@ -332,7 +358,8 @@ async def upload_video(
     file: UploadFile = File(...),
     conf_threshold: float = Query(0.6, ge=0.0, le=1.0),
     frame_skip: int = Query(3, ge=1, le=10, description="Process every Nth frame (higher = faster, less memory)"),
-    max_resolution: int = Query(640, ge=320, le=1280, description="Max width/height for inference")
+    max_resolution: int = Query(640, ge=320, le=1280, description="Max width/height for inference"),
+    session_id: str = Query(None, description="Session ID for per-session email config")
 ):
     """
     Upload video for fall detection processing.
@@ -345,6 +372,13 @@ async def upload_video(
     allowed_types = ["video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska"]
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Unsupported video format. Use MP4, MOV, AVI, or MKV.")
+
+    # Get per-session email if session_id provided
+    target_email = None
+    if session_id:
+        target_email = session_manager.get_session_email(session_id)
+    else:
+        target_email = detector.target_email
 
     # Generate job ID
     job_id = str(uuid.uuid4())[:8]
@@ -372,7 +406,7 @@ async def upload_video(
     video_jobs[job_id] = job
 
     # Start background processing with memory optimization params
-    asyncio.create_task(process_video_job(job_id, str(input_path), str(output_path), conf_threshold, frame_skip, max_resolution))
+    asyncio.create_task(process_video_job(job_id, str(input_path), str(output_path), conf_threshold, frame_skip, max_resolution, target_email))
 
     return VideoUploadResponse(
         job_id=job_id,
@@ -381,7 +415,7 @@ async def upload_video(
     )
 
 
-async def process_video_job(job_id: str, input_path: str, output_path: str, conf_threshold: float, frame_skip: int = 3, max_resolution: int = 640):
+async def process_video_job(job_id: str, input_path: str, output_path: str, conf_threshold: float, frame_skip: int = 3, max_resolution: int = 640, target_email: Optional[str] = None):
     """Background task to process video."""
     job = video_jobs.get(job_id)
     if not job or not detector:
@@ -391,8 +425,6 @@ async def process_video_job(job_id: str, input_path: str, output_path: str, conf
         job.progress = progress
 
     try:
-        detector.set_conf_threshold(conf_threshold)
-
         # Run in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
@@ -403,7 +435,9 @@ async def process_video_job(job_id: str, input_path: str, output_path: str, conf
             update_progress,
             frame_skip,
             max_resolution,
-            True  # half=True for FP16 inference
+            True,  # half=True for FP16 inference
+            target_email,
+            conf_threshold
         )
 
         # Convert results to serializable format
@@ -492,11 +526,16 @@ async def get_config():
 # ============================================================================
 
 @app.post("/api/detect/chunk", response_model=ChunkFrameResponse)
+<<<<<<< HEAD
 async def detect_chunk(request: ChunkFrameRequest):
+=======
+async def detect_chunk(request: ChunkFrameRequest, session_id: str = Query(None)):
+>>>>>>> fixing-frame-issue
     """
     Detect falls in multiple frames (chunk) via REST.
     Used for chunked video processing - client sends 10 frames at a time.
     """
+<<<<<<< HEAD
     if not detector:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
@@ -542,19 +581,105 @@ async def detect_chunk(request: ChunkFrameRequest):
 @app.post("/api/config")
 async def update_config(request: ConfigUpdateRequest):
     """Update detector configuration."""
+=======
+>>>>>>> fixing-frame-issue
     if not detector:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
+    # Get per-session email if session_id provided
+    target_email = None
+    if session_id:
+        target_email = session_manager.get_session_email(session_id)
+    else:
+        target_email = detector.target_email
+
+    import time
+    start_time = time.time()
+
+    try:
+        results = []
+        for i, image_b64 in enumerate(request.images):
+            frame = decode_base64_image(image_b64)
+            if frame is None or frame.size == 0:
+                results.append({
+                    "boxes": [],
+                    "scores": [],
+                    "falls": [],
+                    "timestamp": request.timestamps[i] if i < len(request.timestamps) else time.time()
+                })
+                continue
+
+            result = detector.detect_frame(
+                frame,
+                conf_threshold=request.conf_threshold,
+                target_email=target_email
+            )
+
+            results.append({
+                "boxes": result.boxes,
+                "scores": result.scores,
+                "falls": result.falls,
+                "timestamp": result.timestamp
+            })
+
+        processing_time = time.time() - start_time
+
+        return ChunkFrameResponse(
+            chunk_index=request.chunk_index,
+            results=results,
+            processing_time=processing_time
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chunk detection failed: {str(e)}")
+
+
+@app.post("/api/config")
+async def update_config(request: ConfigUpdateRequest, session_id: str = Query(None)):
+    """Update detector configuration (global or per-session)."""
+    if not detector:
+        raise HTTPException(status_code=503, detail="Detector not initialized")
+
+    # Update global threshold if provided
     if request.conf_threshold is not None:
         detector.set_conf_threshold(request.conf_threshold)
 
+    # Update email - if session_id provided, store per-session; otherwise global
     if request.target_email is not None:
-        detector.set_target_email(request.target_email)
+        if session_id:
+            session_manager.update_session_email(session_id, request.target_email)
+        else:
+            detector.set_target_email(request.target_email)
+
+    # Return current config (session-specific if session_id provided)
+    target_email = detector.target_email
+    if session_id:
+        session_email = session_manager.get_session_email(session_id)
+        if session_email:
+            target_email = session_email
 
     return {
         "conf_threshold": detector.conf_threshold,
-        "target_email": detector.target_email,
+        "target_email": target_email,
         "message": "Configuration updated"
+    }
+
+
+@app.get("/api/config")
+async def get_config(session_id: str = Query(None)):
+    """Get current detector configuration (global or per-session)."""
+    if not detector:
+        raise HTTPException(status_code=503, detail="Detector not initialized")
+
+    target_email = detector.target_email
+    if session_id:
+        session_email = session_manager.get_session_email(session_id)
+        if session_email:
+            target_email = session_email
+
+    return {
+        "conf_threshold": detector.conf_threshold,
+        "target_email": target_email,
+        "model_path": detector.model_path
     }
 
 

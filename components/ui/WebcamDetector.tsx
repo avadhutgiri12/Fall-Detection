@@ -173,12 +173,16 @@ export function WebcamDetector({
     };
   }, [apiUrl, sessionId]);
 
+<<<<<<< HEAD
   // Fetch optional backend config
+=======
+  // Fetch optional backend config (with session_id for per-session config)
+>>>>>>> fixing-frame-issue
   useEffect(() => {
     let cancelled = false;
     const fetchConfig = async () => {
       try {
-        const response = await fetch(`${apiUrl}/api/config`);
+        const response = await fetch(`${apiUrl}/api/config?session_id=${sessionId}`);
         if (!response.ok) return;
         const data = await response.json();
         const threshold = Number(data?.conf_threshold);
@@ -193,12 +197,12 @@ export function WebcamDetector({
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, initialConfThreshold, setConfThreshold]);
+  }, [apiUrl, sessionId, initialConfThreshold, setConfThreshold]);
 
-  // Update target email on backend
+  // Update target email on backend (per-session)
   const updateTargetEmail = useCallback(async (targetEmail: string) => {
     try {
-      const response = await fetch(`${apiUrl}/api/config`, {
+      const response = await fetch(`${apiUrl}/api/config?session_id=${sessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_email: targetEmail }),
@@ -215,7 +219,7 @@ export function WebcamDetector({
       console.error('[WebcamDetector] Failed to update target email:', err);
       toast({ type: 'error', title: 'Email Not Configured', message: 'email not configured' });
     }
-  }, [apiUrl, toast]);
+  }, [apiUrl, sessionId, toast]);
 
   // Draw detections on overlay canvas
   useEffect(() => {
