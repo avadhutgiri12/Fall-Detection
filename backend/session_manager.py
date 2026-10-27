@@ -30,6 +30,7 @@ class SessionManager:
             "last_activity": time.time(),
             "user_agent": "",
             "ip": "",
+            "target_email": None,  # Per-session email for fall alerts
         }
         self.session_connections[session_id] = set()
         return session_id
@@ -76,6 +77,19 @@ class SessionManager:
         self.sessions.pop(session_id, None)
 
         return closed_count
+
+    def update_session_email(self, session_id: str, email: str) -> bool:
+        """Update target email for a session."""
+        if session_id in self.sessions:
+            self.sessions[session_id]["target_email"] = email
+            self.sessions[session_id]["last_activity"] = time.time()
+            return True
+        return False
+
+    def get_session_email(self, session_id: str) -> Optional[str]:
+        """Get target email for a session."""
+        session = self.sessions.get(session_id)
+        return session.get("target_email") if session else None
 
     def update_activity(self, session_id: str) -> bool:
         """Update session last activity timestamp."""
