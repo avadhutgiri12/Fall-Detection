@@ -7,6 +7,8 @@ import { Input, Label } from "./Input";
 import { useFallDetection } from "../hooks/useFallDetection";
 import { useCamera } from "../hooks/useCamera";
 import { useToast } from "./ToastProvider";
+import { useErrorTracker } from "../hooks/useErrorTracker";
+import { ErrorChecker } from "./ErrorChecker";
 
 export interface WebcamDetectorProps {
   /** WebSocket endpoint that accepts JSON { image, conf_threshold }. */
@@ -28,6 +30,25 @@ export function WebcamDetector({
     : "http://localhost:8000",
   initialConfThreshold = 0.6,
 }: WebcamDetectorProps) {
+  // Generate session ID on mount
+  const [sessionId] = useState(() => {
+    if (typeof window !== "undefined") {
+      // Try to get existing session ID from sessionStorage
+      const stored = sessionStorage.getItem("fall_detection_session_id");
+      if (stored) return stored;
+      // Generate new session ID
+      const newId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      sessionStorage.setItem("fall_detection_session_id", newId);
+      return newId;
+    }
+    return `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  });
+
+  // Build WS URL with session ID
+  const wsUrlWithSession = typeof window !== "undefined"
+    ? `${wsUrl}?session_id=${sessionId}`
+    : wsUrl;
+
   // Use the camera hook for camera management
   const {
     videoRef,
@@ -40,6 +61,9 @@ export function WebcamDetector({
 
   // Toast notifications
   const { toast } = useToast();
+
+  // Error tracker
+  const { errors, trackError, trackWarning, trackInfo, clearErrors: clearErrorTracker, resolveError, copyError, exportErrors } = useErrorTracker();
 
   // Handle fall detection with toast (cooldown handled by useFallDetection hook)
   const handleFallDetected = useCallback((score: number) => {
@@ -61,12 +85,50 @@ export function WebcamDetector({
     stopDetection,
     setConfThreshold,
   } = useFallDetection({
-    wsUrl,
+    wsUrl: wsUrlWithSession,
     onFallDetected: handleFallDetected,
   });
 
+  // Track detection errors in error tracker
+  useEffect(() => {
+    if (detectionError) {
+      trackError('detection', 'error', detectionError, {});
+    }
+  }, [detectionError, trackError]);
+
+  // Track camera errors in error tracker
+  useEffect(() => {
+    if (cameraError) {
+      trackError('camera', 'error', cameraError, {});
+    }
+  }, [cameraError, trackError]);
+
+  // Track WebSocket connection status changes
+  useEffect(() => {
+    if (wsStatus === "CONNECTING") {
+      trackInfo('websocket', 'WebSocket connecting...', {});
+    } else if (wsStatus === "OPEN") {
+      trackInfo('websocket', 'WebSocket connected', {});
+    } else if (wsStatus === "CLOSED" && isDetecting) {
+      trackWarning('websocket', 'WebSocket closed unexpectedly during detection', {});
+    } else if (wsStatus === "CLOSED" && !isDetecting) {
+      trackInfo('websocket', 'WebSocket closed (detection stopped)', {});
+    }
+  }, [wsStatus, isDetecting, trackInfo, trackWarning]);
+
+  // Track frame send/receive
+  useEffect(() => {
+    if (lastSent && lastReceived) {
+      const latency = lastReceived - lastSent;
+      if (latency > 5000) {
+        trackWarning('websocket', `High detection latency: ${latency}ms`, { latency });
+      }
+    }
+  }, [lastSent, lastReceived, trackWarning]);
+
   // Local UI state
   const [showSettings, setShowSettings] = useState(false);
+  const [showErrorPanel, setShowErrorPanel] = useState(false);
   const [combinedError, setCombinedError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [isEmailConfigured, setIsEmailConfigured] = useState(false);
@@ -76,6 +138,40 @@ export function WebcamDetector({
   useEffect(() => {
     setCombinedError(cameraError || detectionError);
   }, [cameraError, detectionError]);
+
+  // Register session with backend on mount
+  useEffect(() => {
+    let cancelled = false;
+    const registerSession = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/session/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+        if (!response.ok && !cancelled) {
+          console.warn('[WebcamDetector] Failed to register session:', await response.text());
+        }
+      } catch (err) {
+        if (!cancelled) console.warn('[WebcamDetector] Session registration error:', err);
+      }
+    };
+    void registerSession();
+    return () => { cancelled = true; };
+  }, [apiUrl, sessionId]);
+
+  // Cleanup session on unmount (page refresh/close)
+  useEffect(() => {
+    return () => {
+      // Use sendBeacon for reliable cleanup on page unload
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify({ session_id: sessionId })], { type: 'application/json' });
+        navigator.sendBeacon(`${apiUrl}/api/session/cleanup`, blob);
+      }
+      // Clear session storage
+      sessionStorage.removeItem("fall_detection_session_id");
+    };
+  }, [apiUrl, sessionId]);
 
   // Fetch optional backend config
   useEffect(() => {
@@ -532,6 +628,34 @@ export function WebcamDetector({
                   <div><span className="font-medium">Last Sent:</span> {lastSent ? `${((Date.now() - lastSent) / 1000).toFixed(1)}s ago` : "Never"}</div>
                   <div><span className="font-medium">Last Received:</span> {lastReceived ? `${((Date.now() - lastReceived) / 1000).toFixed(1)}s ago` : "Never"}</div>
                 </div>
+              </div>
+            </details>
+          )}
+
+          {/* Error Checker Panel */}
+          {(isCameraOn || isDetecting) && (
+            <details className="group mt-4">
+              <summary className="flex items-center justify-between cursor-pointer list-none text-sm font-medium text-gray-700 dark:text-gray-300">
+                <span className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-orange-500" />
+                  Error Debugger
+                </span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </summary>
+              <div className="mt-4">
+                <ErrorChecker
+                  errors={errors}
+                  onClear={clearErrorTracker}
+                  onResolve={resolveError}
+                  onCopy={copyError}
+                  onExport={exportErrors}
+                  maxHeight="300px"
+                  title="Webcam Detection Errors"
+                  showFilter={true}
+                  showExport={true}
+                />
               </div>
             </details>
           )}
