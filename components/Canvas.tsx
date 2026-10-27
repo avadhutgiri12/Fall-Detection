@@ -326,6 +326,7 @@ export function Canvas() {
           {activeTab === "upload" && (
             <div role="tabpanel" aria-label="Video upload analysis">
               <VideoUploadDetector
+                wsUrl={WS_URL}
                 apiUrl={API_URL}
                 initialConfThreshold={0.6}
               />

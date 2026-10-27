@@ -30,6 +30,15 @@ export type { VideoUploadDetectorProps } from "./VideoUploadDetector";
 export { useFallDetection } from "../hooks/useFallDetection";
 export type { UseFallDetectionReturn, UseFallDetectionOptions } from "../hooks/useFallDetection";
 
+export { useFrameStreamDetection } from "../hooks/useFrameStreamDetection";
+export type { DetectionResult, UseFrameStreamDetectionOptions, UseFrameStreamDetectionReturn } from "../hooks/useFrameStreamDetection";
+
+export { useDetectionQueue } from "../hooks/useDetectionQueue";
+export type { QueueStats, UseDetectionQueueOptions, UseDetectionQueueReturn } from "../hooks/useDetectionQueue";
+
+export { useVideoFileDetection } from "../hooks/useVideoFileDetection";
+export type { VideoFrame as VideoFileFrame, UseVideoFileDetectionOptions, UseVideoFileDetectionReturn } from "../hooks/useVideoFileDetection";
+
 export { useCamera } from "../hooks/useCamera";
 export type { UseCameraReturn, UseCameraOptions } from "../hooks/useCamera";
 

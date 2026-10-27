@@ -1,0 +1,38 @@
+[
+  {
+    "id": "1",
+    "title": "Create shared useFrameStreamDetection.ts hook",
+    "description": "Core WebSocket logic: connection, send loop, reconnect, frame_index, onFrameError callback",
+    "status": "in_progress"
+  },
+  {
+    "id": "2",
+    "title": "Create useVideoFileDetection.ts hook",
+    "description": "Video file adapter: frame extraction at 10 FPS, feeds frames to shared core",
+    "status": "pending"
+  },
+  {
+    "id": "3",
+    "title": "Create useDetectionQueue.ts hook",
+    "description": "Queue management: polls /api/ws/stats, returns queue position, estimated wait, cancel",
+    "status": "pending"
+  },
+  {
+    "id": "4",
+    "title": "Refactor useFallDetection.ts to use shared core",
+    "description": "Thin wrapper over useFrameStreamDetection for webcam",
+    "status": "pending"
+  },
+  {
+    "id": "5",
+    "title": "Update VideoUploadDetector.tsx to use new hooks",
+    "description": "Use useVideoFileDetection + useDetectionQueue, remove old chunking logic",
+    "status": "pending"
+  },
+  {
+    "id": "6",
+    "title": "Verify build and test",
+    "description": "npm run build, check for errors",
+    "status": "pending"
+  }
+]

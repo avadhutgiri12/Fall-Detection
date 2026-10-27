@@ -7,7 +7,7 @@ import { Input } from "./Input";
 import { Label } from "./Input";
 import { useToast } from "./ToastProvider";
 import { useErrorTracker } from "../hooks/useErrorTracker";
-import { useVideoChunking } from "../hooks/useVideoChunking";
+import { useVideoFileDetection, type DetectionResult } from "../hooks/useVideoFileDetection";
 import { useVideoCache } from "../hooks/useVideoCache";
 import { ErrorChecker } from "./ErrorChecker";
 
@@ -26,10 +26,10 @@ interface ChunkedJob {
 }
 
 export interface VideoUploadDetectorProps {
-  /** REST API base URL */
-  apiUrl?: string;
-  /** WebSocket URL for real-time chunk processing */
+  /** WebSocket URL for real-time detection */
   wsUrl?: string;
+  /** REST API base URL (fallback) */
+  apiUrl?: string;
   /** Initial confidence threshold */
   initialConfThreshold?: number;
   /** Callback when processing completes */
@@ -37,12 +37,12 @@ export interface VideoUploadDetectorProps {
 }
 
 export function VideoUploadDetector({
-  apiUrl = typeof window !== "undefined"
-    ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-    : "http://localhost:8000",
   wsUrl = typeof window !== "undefined"
     ? process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
     : "ws://localhost:8000",
+  apiUrl = typeof window !== "undefined"
+    ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    : "http://localhost:8000",
   initialConfThreshold = 0.6,
   onComplete,
 }: VideoUploadDetectorProps) {
@@ -146,80 +146,82 @@ export function VideoUploadDetector({
 
   const {
     isProcessing,
-    currentChunk,
-    totalChunks: processedTotalChunks,
-    processedChunks,
-    error: chunkingError,
+    isConnected,
+    currentFrame,
+    totalFrames,
+    framesSent,
+    framesReceived,
+    progress,
+    error: detectionError,
+    results,
     processVideo,
     cancelProcessing,
-    reset: resetChunking
-  } = useVideoChunking({
-    chunkSize,
-    totalChunks,
-    confThreshold,
-    maxResolution,
+    reset: resetDetection,
+    setConfThreshold: setDetectionConfThreshold,
+  } = useVideoFileDetection({
     wsUrl: `${wsUrl}/ws/detect?session_id=${sessionId}`,
     apiUrl,
-    onChunkComplete: (result) => {
-      // Aggregate results
-      const newResults = result.results;
+    fps: 10,
+    maxResolution,
+    confThreshold,
+    sessionId,
+    onFrameResult: (result: DetectionResult) => {
+      // Store result
       setJob(prev => ({
         ...prev,
-        results: [...prev.results, ...newResults],
-        progress: result.chunkIndex / processedTotalChunks,
+        results: [...prev.results, {
+          boxes: result.boxes,
+          scores: result.scores,
+          falls: result.falls,
+          timestamp: result.timestamp,
+        }],
+        progress: totalFrames > 0 ? result.frame_index / totalFrames : 0,
       }));
+    },
+    onFrameError: (frameIndex, err) => {
+      trackError('video-upload', 'error', `Frame ${frameIndex} failed: ${err.message}`, { frameIndex });
+    },
+    onFallDetected: (score, frameIndex) => {
+      const timestamp = new Date(Date.now()).toLocaleTimeString();
 
-      // Check for fall detections and show toasts
-      newResults.forEach((frameResult) => {
-        const fallIndices = frameResult.falls
-          .map((fall, idx) => (fall ? idx : -1))
-          .filter((idx) => idx !== -1);
+      // Toast for fall detected
+      toast({
+        type: 'warning',
+        title: '⚠ Fall Detected',
+        message: `Fall detected at ${timestamp} (${(score * 100).toFixed(0)}% confidence)`,
+        duration: 5000,
+      });
 
-        fallIndices.forEach((fallIdx) => {
-          const frameIndex = frameResult.timestamp; // Using timestamp as unique identifier
-          const frameKey = Math.round(frameIndex * 1000); // Convert to milliseconds for uniqueness
-
-          // Avoid duplicate toasts for the same frame
-          if (notifiedFallFramesRef.current.has(frameKey)) return;
-          notifiedFallFramesRef.current.add(frameKey);
-
-          const confidence = frameResult.scores[fallIdx] || 0;
-          const timestamp = new Date(frameResult.timestamp * 1000).toLocaleTimeString();
-
-          // Toast for fall detected
-          toast({
-            type: 'warning',
-            title: '⚠ Fall Detected',
-            message: `Fall detected at ${timestamp} (${(confidence * 100).toFixed(0)}% confidence)`,
-            duration: 5000,
-          });
-
-          // Toast for email sent (assuming backend sends email on fall detection)
-          if (isEmailConfigured) {
-            toast({
-              type: 'info',
-              title: '📧 Email Alert Sent',
-              message: `Fall alert sent to configured email address`,
-              duration: 4000,
-            });
-          }
+      // Toast for email sent (assuming backend sends email on fall detection)
+      if (isEmailConfigured) {
+        toast({
+          type: 'info',
+          title: '📧 Email Alert Sent',
+          message: `Fall alert sent to configured email address`,
+          duration: 4000,
         });
+      }
+    },
+    onProgress: (p) => {
+      setJob(prev => ({ ...prev, progress: p }));
+    },
+    onComplete: (allResults) => {
+      trackInfo('video-upload', `Video processing completed: ${sessionId}`, {
+        sessionId,
+        framesProcessed: allResults.length,
       });
     },
-    onProgress: (progress) => {
-      setJob(prev => ({ ...prev, progress }));
-    },
-    onError: (err, chunkIndex) => {
-      trackError('video-upload', 'error', `Chunk ${chunkIndex} failed: ${err}`, { chunkIndex });
+    onError: (err) => {
+      trackError('video-upload', 'error', `Processing failed: ${err}`, { sessionId });
     },
   });
 
-  // Sync chunking error to local error state
+  // Sync detection error to local error state
   useEffect(() => {
-    if (chunkingError) {
-      setError(chunkingError);
+    if (detectionError) {
+      setError(detectionError);
     }
-  }, [chunkingError]);
+  }, [detectionError]);
 
   // Update target email on backend (per-session)
   const updateTargetEmail = useCallback(async (targetEmail: string) => {
@@ -264,11 +266,11 @@ export function VideoUploadDetector({
       setError(null);
       // Reset job state when new file selected
       setJob({ status: "idle", progress: 0, results: [] });
-      resetChunking();
+      resetDetection();
     }
-  }, [resetChunking]);
+  }, [resetDetection]);
 
-  // Process video with chunked approach
+  // Process video with WebSocket approach
   const handleProcess = useCallback(async () => {
     if (!selectedFile) return;
 
@@ -297,15 +299,12 @@ export function VideoUploadDetector({
         videoName: selectedFile.name,
         videoSize: selectedFile.size,
         videoType: selectedFile.type,
-        totalChunks,
+        totalChunks: Math.ceil((selectedFile.size / (1024 * 1024)) * 10), // Estimate
         chunkSize,
         status: "processing",
       });
 
-      const results = await processVideo(selectedFile);
-
-      // Flatten all results
-      const allResults = results.flatMap(r => r.results);
+      const allResults = await processVideo(selectedFile);
 
       setJob({
         status: "completed",
@@ -331,7 +330,7 @@ export function VideoUploadDetector({
       setError(errorMsg);
       setJob(prev => ({ ...prev, status: "failed", error: errorMsg }));
     }
-  }, [selectedFile, isEmailConfigured, cacheReady, processVideo, totalChunks, chunkSize, sessionId, apiUrl, toast, onComplete, job]);
+  }, [selectedFile, isEmailConfigured, cacheReady, processVideo, chunkSize, sessionId, apiUrl, toast, onComplete, job, saveSession, getAllSessions, updateSession]);
 
   // Cancel processing
   const handleCancel = useCallback(() => {
@@ -342,14 +341,14 @@ export function VideoUploadDetector({
   // Reset to initial state
   const handleReset = useCallback(async () => {
     cancelProcessing();
-    resetChunking();
+    resetDetection();
     if (job.sessionId) {
       await clearSessionCache(job.sessionId);
     }
     setJob({ status: "idle", progress: 0, results: [] });
     setSelectedFile(null);
     setError(null);
-  }, [cancelProcessing, resetChunking, job.sessionId, clearSessionCache]);
+  }, [cancelProcessing, resetDetection, job.sessionId, clearSessionCache]);
 
   // Format file size
   const formatSize = (bytes: number) => {
@@ -491,7 +490,7 @@ export function VideoUploadDetector({
             <div className="text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-full border-4 border-primary/20 border-t-primary animate-spin" aria-hidden="true" />
               <h3 className="text-lg font-semibold text-foreground mb-1">Processing Video...</h3>
-              <p className="text-muted-foreground">Analyzing frames for fall detection (chunk {currentChunk + 1} of {processedTotalChunks})</p>
+              <p className="text-muted-foreground">Analyzing frames for fall detection (frame {currentFrame + 1} of {totalFrames})</p>
             </div>
 
             <div className="space-y-2">
@@ -506,7 +505,7 @@ export function VideoUploadDetector({
                 />
               </div>
               <p className="text-xs text-muted-foreground text-right">
-                Session: {job.sessionId} • Chunks: {processedChunks}/{processedTotalChunks}
+                Session: {job.sessionId} • Frames: {framesSent} sent / {framesReceived} received
               </p>
             </div>
 
@@ -530,7 +529,7 @@ export function VideoUploadDetector({
                   </div>
                   <div>
                     <h3 className="font-semibold text-green-800">Processing Complete</h3>
-                    <p className="text-green-700 text-sm">Analyzed {job.results.length} frames in {processedTotalChunks} chunks.</p>
+                    <p className="text-green-700 text-sm">Analyzed {job.results.length} frames.</p>
                   </div>
                 </div>
 

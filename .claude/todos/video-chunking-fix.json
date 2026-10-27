@@ -1,0 +1,20 @@
+[
+  {
+    "id": "1",
+    "title": "Modify useVideoChunking.ts to use REST only for chunked processing",
+    "description": "Remove sendChunkViaWebSocket function, remove wsUrl from options, default to sendChunkViaREST",
+    "status": "completed"
+  },
+  {
+    "id": "2",
+    "title": "Update VideoUploadDetector.tsx to remove wsUrl from useVideoChunking call",
+    "description": "Remove wsUrl prop from the hook call on line 161",
+    "status": "completed"
+  },
+  {
+    "id": "3",
+    "title": "Verify the fix works",
+    "description": "Start backend and frontend, test video upload processing",
+    "status": "completed"
+  }
+]

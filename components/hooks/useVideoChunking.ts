@@ -35,8 +35,6 @@ export interface UseVideoChunkingOptions {
   confThreshold?: number;
   /** Max resolution for inference */
   maxResolution?: number;
-  /** WebSocket URL for sending chunks */
-  wsUrl?: string;
   /** REST API URL for chunk detection */
   apiUrl?: string;
   /** Callback when a chunk is processed */
@@ -67,7 +65,6 @@ export function useVideoChunking({
   totalChunks = 24,
   confThreshold = 0.6,
   maxResolution = 640,
-  wsUrl,
   apiUrl = typeof window !== "undefined"
     ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     : "http://localhost:8000",
@@ -175,92 +172,6 @@ export function useVideoChunking({
     [maxResolution]
   );
 
-  const sendChunkViaWebSocket = useCallback(
-    async (frames: VideoFrame[], chunkIndex: number): Promise<ChunkResult> => {
-      if (!wsUrl) throw new Error("WebSocket URL not provided");
-
-      return new Promise((resolve, reject) => {
-        const ws = new WebSocket(wsUrl);
-        const startTime = performance.now();
-
-        ws.onopen = () => {
-          // Send all frames in this chunk
-          frames.forEach((frame) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (typeof reader.result === "string") {
-                ws.send(
-                  JSON.stringify({
-                    image: reader.result,
-                    conf_threshold: confThreshold,
-                    chunk_index: chunkIndex,
-                    frame_index: frame.index,
-                    timestamp: frame.timestamp,
-                  })
-                );
-              }
-            };
-            reader.readAsDataURL(frame.blob);
-          });
-        };
-
-        const results: ChunkResult["results"] = [];
-        let receivedCount = 0;
-
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.error) {
-              ws.close();
-              reject(new Error(data.error));
-              return;
-            }
-
-            results.push({
-              boxes: data.boxes || [],
-              scores: data.scores || [],
-              falls: data.falls || [],
-              timestamp: data.timestamp || Date.now() / 1000,
-            });
-            receivedCount++;
-
-            if (receivedCount >= frames.length) {
-              ws.close();
-              resolve({
-                chunkIndex,
-                frames: frames.length,
-                results,
-                processingTime: performance.now() - startTime,
-              });
-            }
-          } catch (err) {
-            ws.close();
-            reject(err);
-          }
-        };
-
-        ws.onerror = () => {
-          reject(new Error("WebSocket error"));
-        };
-
-        ws.onclose = () => {
-          if (receivedCount === 0) {
-            reject(new Error("WebSocket closed before receiving results"));
-          }
-        };
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.close();
-            reject(new Error("Chunk processing timeout"));
-          }
-        }, 30000);
-      });
-    },
-    [wsUrl, confThreshold]
-  );
-
   const sendChunkViaREST = useCallback(
     async (frames: VideoFrame[], chunkIndex: number): Promise<ChunkResult> => {
       const startTime = performance.now();
@@ -357,13 +268,7 @@ export function useVideoChunking({
             continue;
           }
 
-          let result: ChunkResult;
-
-          if (wsUrl) {
-            result = await sendChunkViaWebSocket(frames, chunkIndex);
-          } else {
-            result = await sendChunkViaREST(frames, chunkIndex);
-          }
+          const result = await sendChunkViaREST(frames, chunkIndex);
 
           results.push(result);
           setChunkResults(results);
@@ -388,9 +293,7 @@ export function useVideoChunking({
       chunkSize,
       totalChunks,
       extractFramesFromVideo,
-      sendChunkViaWebSocket,
       sendChunkViaREST,
-      wsUrl,
       onChunkComplete,
       onProgress,
       onError,
