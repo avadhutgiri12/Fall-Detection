@@ -173,11 +173,7 @@ export function WebcamDetector({
     };
   }, [apiUrl, sessionId]);
 
-<<<<<<< HEAD
-  // Fetch optional backend config
-=======
   // Fetch optional backend config (with session_id for per-session config)
->>>>>>> fixing-frame-issue
   useEffect(() => {
     let cancelled = false;
     const fetchConfig = async () => {
