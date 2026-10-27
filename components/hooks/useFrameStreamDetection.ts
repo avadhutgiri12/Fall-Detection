@@ -64,6 +64,11 @@ export function useFrameStreamDetection({
   const mountedRef = useRef(false);
   const intentionalCloseRef = useRef(false);
   const wsReadyRef = useRef(false);
+  const callbacksRef = useRef({ onFrameResult, onFrameError, onFallDetected });
+
+  useEffect(() => {
+    callbacksRef.current = { onFrameResult, onFrameError, onFallDetected };
+  }, [onFrameResult, onFrameError, onFallDetected]);
 
   const [isDetecting, setIsDetecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -186,30 +191,42 @@ export function useFrameStreamDetection({
           setError("The detection server returned invalid JSON.");
         }
         // Do not leave the sender locked if the server sent a non-JSON response.
+        const badFrameIndex = pendingFrameIndexRef.current;
         framePendingRef.current = false;
         pendingFrameIndexRef.current = null;
         clearResponseTimeout();
+        if (badFrameIndex !== null) {
+          callbacksRef.current.onFrameError?.(badFrameIndex, new Error("The detection server returned invalid JSON."));
+        }
         return;
       }
 
       // If the backend reports an error, release the pending frame so processing
       // can decide whether to continue or stop.
       if (data?.error) {
+        const failedFrameIndex = pendingFrameIndexRef.current;
         framePendingRef.current = false;
         pendingFrameIndexRef.current = null;
         clearResponseTimeout();
         console.error("[useFrameStreamDetection] Backend error:", data.error);
         if (mountedRef.current) setError(String(data.error));
+        if (failedFrameIndex !== null) {
+          callbacksRef.current.onFrameError?.(failedFrameIndex, new Error(String(data.error)));
+        }
         return;
       }
 
       // Some backends send status/ack messages before the actual detection result.
       // Only treat messages with detection fields as completed frame responses.
+      const payload = data?.result && typeof data.result === "object"
+        ? data.result
+        : data?.detection && typeof data.detection === "object"
+          ? data.detection
+          : data;
       const hasDetectionPayload =
-        Array.isArray(data?.boxes) ||
-        Array.isArray(data?.scores) ||
-        Array.isArray(data?.falls) ||
-        data?.frame_index !== undefined;
+        Array.isArray(payload?.boxes) ||
+        Array.isArray(payload?.scores) ||
+        Array.isArray(payload?.falls);
 
       if (!hasDetectionPayload) {
         console.debug("[useFrameStreamDetection] Ignoring non-detection message:", data);
@@ -221,14 +238,15 @@ export function useFrameStreamDetection({
       pendingFrameIndexRef.current = null;
       clearResponseTimeout();
 
-      const boxes = Array.isArray(data?.boxes) ? data.boxes : [];
-      const scores = Array.isArray(data?.scores) ? data.scores.map(Number) : [];
-      const falls = Array.isArray(data?.falls) ? data.falls.map(Boolean) : [];
-      const rawTimestamp = data?.timestamp == null ? Number.NaN : Number(data.timestamp);
+      const boxes = Array.isArray(payload?.boxes) ? payload.boxes : [];
+      const scores = Array.isArray(payload?.scores) ? payload.scores.map(Number) : [];
+      const falls = Array.isArray(payload?.falls) ? payload.falls.map(Boolean) : [];
+      const rawTimestamp = payload?.timestamp == null ? Number.NaN : Number(payload.timestamp);
       const timestamp = Number.isFinite(rawTimestamp)
         ? (rawTimestamp > 1e12 ? rawTimestamp / 1000 : rawTimestamp)
         : Date.now() / 1000;
-      const parsedIndex = Number(data?.frame_index);
+      const rawFrameIndex = payload?.frame_index ?? data?.frame_index;
+      const parsedIndex = rawFrameIndex == null ? Number.NaN : Number(rawFrameIndex);
       const frameIndex = Number.isFinite(parsedIndex)
         ? parsedIndex
         : (respondedFrameIndex ?? -1);
@@ -248,14 +266,14 @@ export function useFrameStreamDetection({
         setError(null);
       }
 
-      onFrameResult?.(result);
+      callbacksRef.current.onFrameResult?.(result);
 
       const fallIndex = result.falls.findIndex(Boolean);
-      if (fallIndex !== -1 && onFallDetected) {
+      if (fallIndex !== -1 && callbacksRef.current.onFallDetected) {
         const now = Date.now();
         if (now - lastFallAlertRef.current >= 2000) {
           lastFallAlertRef.current = now;
-          onFallDetected(Number(result.scores[fallIndex]) || 0, frameIndex);
+          callbacksRef.current.onFallDetected(Number(result.scores[fallIndex]) || 0, frameIndex);
         }
       }
     };
@@ -271,9 +289,13 @@ export function useFrameStreamDetection({
       if (wsRef.current !== ws) return;
       wsRef.current = null;
       wsReadyRef.current = false;
+      const interruptedFrameIndex = pendingFrameIndexRef.current;
       framePendingRef.current = false;
       pendingFrameIndexRef.current = null;
       clearResponseTimeout();
+      if (interruptedFrameIndex !== null && isDetectingRef.current && !intentionalCloseRef.current) {
+        callbacksRef.current.onFrameError?.(interruptedFrameIndex, new Error("WebSocket closed before the detection result arrived."));
+      }
 
       if (mountedRef.current) {
         setIsConnected(false);
@@ -294,7 +316,7 @@ export function useFrameStreamDetection({
         }, 1000);
       }
     };
-  }, [wsUrl, onFrameResult, onFallDetected, clearResponseTimeout]);
+  }, [wsUrl, clearResponseTimeout]);
 
   connectWebSocketRef.current = connectWebSocket;
 
@@ -339,7 +361,7 @@ export function useFrameStreamDetection({
           const message = `No detection response received for frame ${pendingIndex ?? frameIndex}.`;
           console.error("[useFrameStreamDetection]", message);
           if (mountedRef.current) setError(message);
-          onFrameError?.(
+          callbacksRef.current.onFrameError?.(
             pendingIndex ?? frameIndex,
             new Error(message)
           );
@@ -354,11 +376,11 @@ export function useFrameStreamDetection({
         const error = err instanceof Error ? err : new Error(String(err));
         console.error("[useFrameStreamDetection] Failed to send frame:", error);
         if (mountedRef.current) setError("Failed to send a frame to the detection server.");
-        onFrameError?.(frameIndex, error);
+        callbacksRef.current.onFrameError?.(frameIndex, error);
         return false;
       }
     },
-    [clearResponseTimeout, onFrameError]
+    [clearResponseTimeout]
   );
 
   const startDetection = useCallback(

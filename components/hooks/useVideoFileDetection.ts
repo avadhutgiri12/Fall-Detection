@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFrameStreamDetection, type DetectionResult } from "./useFrameStreamDetection";
 import { useVideoCache } from "./useVideoCache";
 
@@ -13,34 +13,21 @@ export interface VideoFrame {
 }
 
 export interface UseVideoFileDetectionOptions {
-  /** WebSocket URL for detection */
   wsUrl?: string;
-  /** REST API URL for fallback */
   apiUrl?: string;
-  /** Number of frames per second to process (default: 10) */
   fps?: number;
-  /** Max resolution for inference (default: 640) */
   maxResolution?: number;
-  /** Confidence threshold for detection (default: 0.6) */
   confThreshold?: number;
-  /** Session ID for backend session tracking */
   sessionId?: string;
-  /** Callback when a frame result is received */
   onFrameResult?: (result: DetectionResult) => void;
-  /** Callback when a frame fails */
   onFrameError?: (frameIndex: number, error: Error) => void;
-  /** Callback when a fall is detected */
   onFallDetected?: (score: number, frameIndex: number) => void;
-  /** Callback for progress updates (0-1) */
   onProgress?: (progress: number) => void;
-  /** Callback when processing completes */
   onComplete?: (results: DetectionResult[]) => void;
-  /** Callback for errors */
   onError?: (error: string) => void;
 }
 
 export interface UseVideoFileDetectionReturn {
-  // State
   isProcessing: boolean;
   isConnected: boolean;
   currentFrame: number;
@@ -51,19 +38,20 @@ export interface UseVideoFileDetectionReturn {
   error: string | null;
   results: DetectionResult[];
   confThreshold: number;
-
-  // Controls
   processVideo: (videoFile: File) => Promise<DetectionResult[]>;
   cancelProcessing: () => void;
   reset: () => void;
   setConfThreshold: (value: number) => void;
 }
 
+const CONNECTION_TIMEOUT_MS = 15_000;
+const FRAME_RESPONSE_TIMEOUT_MS = 12_000;
+const SEND_RETRY_INTERVAL_MS = 50;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export function useVideoFileDetection({
   wsUrl,
-  apiUrl = typeof window !== "undefined"
-    ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-    : "http://localhost:8000",
   fps = 10,
   maxResolution = 640,
   confThreshold: initialConfThreshold = 0.6,
@@ -76,6 +64,7 @@ export function useVideoFileDetection({
   onError,
 }: UseVideoFileDetectionOptions = {}): UseVideoFileDetectionReturn {
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -83,24 +72,22 @@ export function useVideoFileDetection({
   const [results, setResults] = useState<DetectionResult[]>([]);
   const [confThreshold, setConfThresholdState] = useState(initialConfThreshold);
 
-  // Keep the latest WebSocket state accessible to long-running async callbacks.
-  const isConnectedRef = useRef(false);
-
+  const processingRef = useRef(false);
   const cancelRef = useRef(false);
-  const animationRef = useRef<number | null>(null);
-  const lastCaptureTimeRef = useRef(0);
-  const frameIndexRef = useRef(0);
-  const videoFileRef = useRef<File | null>(null);
-  const videoElementRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const connectedRef = useRef(false);
+  const resultsRef = useRef<DetectionResult[]>([]);
+  const completedFrameIndicesRef = useRef<Set<number>>(new Set());
+  const callbacksRef = useRef({ onFrameResult, onFrameError, onFallDetected, onProgress, onComplete, onError });
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const { saveChunk, clearSessionCache } = useVideoCache();
 
-  // Cache for storing results
-  const { saveChunk, updateSession, clearSessionCache } = useVideoCache();
+  useEffect(() => {
+    callbacksRef.current = { onFrameResult, onFrameError, onFallDetected, onProgress, onComplete, onError };
+  }, [onFrameResult, onFrameError, onFallDetected, onProgress, onComplete, onError]);
 
-  // Shared core detection hook
   const {
-    isDetecting,
-    isConnected,
+    isConnected: socketConnected,
     framesSent,
     framesReceived,
     sendFrame,
@@ -109,421 +96,248 @@ export function useVideoFileDetection({
     setConfThreshold: setCoreConfThreshold,
     confThreshold: coreConfThreshold,
   } = useFrameStreamDetection({
-    wsUrl: wsUrl || "", // Will be validated in processVideo
+    wsUrl: wsUrl || "",
     confThreshold: initialConfThreshold,
     onFrameResult: (result) => {
-      // Store result
-      setResults((prev) => [...prev, result]);
-      onFrameResult?.(result);
+      // Deduplicate by frame index: late/duplicate messages must not inflate summaries.
+      if (!resultsRef.current.some((item) => item.frame_index === result.frame_index)) {
+        resultsRef.current = [...resultsRef.current, result].sort((a, b) => a.frame_index - b.frame_index);
+        setResults(resultsRef.current);
+      }
+      completedFrameIndicesRef.current.add(result.frame_index);
+      callbacksRef.current.onFrameResult?.(result);
 
-      // Save to IndexedDB cache per frame (or batch per 10 frames)
       if (sessionId && result.frame_index >= 0) {
-        saveChunk({
+        void saveChunk({
           sessionId,
-          chunkIndex: Math.floor(result.frame_index / 10), // Group frames into chunks of 10
-          frames: [{
-            index: result.frame_index,
-            blob: new Blob(), // We don't have the blob here, just storing results
-            timestamp: result.timestamp,
-          }],
-          results: [{
-            boxes: result.boxes,
-            scores: result.scores,
-            falls: result.falls,
-            timestamp: result.timestamp,
-          }],
-        }).catch(console.error);
+          chunkIndex: Math.floor(result.frame_index / 10),
+          frames: [{ index: result.frame_index, blob: new Blob(), timestamp: result.timestamp }],
+          results: [{ boxes: result.boxes, scores: result.scores, falls: result.falls, timestamp: result.timestamp }],
+        }).catch((err) => console.warn("[useVideoFileDetection] Cache save failed:", err));
       }
     },
     onFrameError: (frameIndex, err) => {
-      console.error(`[useVideoFileDetection] Frame ${frameIndex} error:`, err);
-      onFrameError?.(frameIndex, err);
-      // Continue processing - don't stop on single frame error
+      completedFrameIndicesRef.current.add(frameIndex);
+      callbacksRef.current.onFrameError?.(frameIndex, err);
     },
-    onFallDetected: (score, frameIndex) => {
-      onFallDetected?.(score, frameIndex);
-    },
+    onFallDetected: (score, frameIndex) => callbacksRef.current.onFallDetected?.(score, frameIndex),
   });
 
-  // Sync values that are read by long-running async callbacks.
   useEffect(() => {
-    isConnectedRef.current = isConnected;
-  }, [isConnected]);
+    connectedRef.current = socketConnected;
+    setIsConnected(socketConnected);
+  }, [socketConnected]);
 
-  useEffect(() => {
-    setConfThresholdState(coreConfThreshold);
-  }, [coreConfThreshold]);
+  useEffect(() => setConfThresholdState(coreConfThreshold), [coreConfThreshold]);
 
-  const extractFramesFromVideo = useCallback(
-    async (videoFile: File, startFrame: number, frameCount: number): Promise<VideoFrame[]> => {
-      return new Promise((resolve, reject) => {
-        const video = document.createElement("video");
-        video.preload = "metadata";
-        video.muted = true;
-        video.playsInline = true;
-
-        const url = URL.createObjectURL(videoFile);
-        video.src = url;
-
-        const frames: VideoFrame[] = [];
-        let extractedCount = 0;
-        let frameDuration = 0;
-
-        video.onloadedmetadata = () => {
-          const duration = video.duration;
-          const totalFrames = Math.floor(duration * 30); // Assume 30 FPS source
-          frameDuration = duration / totalFrames;
-
-          // Seek to start frame
-          video.currentTime = startFrame * frameDuration;
-        };
-
-        video.onseeked = () => {
-          if (cancelRef.current) {
-            URL.revokeObjectURL(url);
-            reject(new Error("Processing cancelled"));
-            return;
-          }
-
-          if (extractedCount >= frameCount || video.currentTime >= video.duration) {
-            URL.revokeObjectURL(url);
-            resolve(frames);
-            return;
-          }
-
-          // Create canvas for frame extraction
-          const canvas = document.createElement("canvas");
-          const ctx = canvas.getContext("2d");
-          if (!ctx) {
-            URL.revokeObjectURL(url);
-            reject(new Error("Could not create canvas context"));
-            return;
-          }
-
-          // Set canvas size (respecting max resolution)
-          const scale = Math.min(maxResolution / video.videoWidth, maxResolution / video.videoHeight, 1);
-          canvas.width = video.videoWidth * scale;
-          canvas.height = video.videoHeight * scale;
-
-          // Draw frame
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-          // Convert to blob
-          canvas.toBlob(
-            (blob) => {
-              if (blob) {
-                frames.push({
-                  index: startFrame + extractedCount,
-                  blob,
-                  timestamp: video.currentTime,
-                });
-                extractedCount++;
-
-                // Seek to next frame
-                const nextTime = video.currentTime + frameDuration;
-                if (nextTime < video.duration && extractedCount < frameCount) {
-                  video.currentTime = nextTime;
-                } else {
-                  URL.revokeObjectURL(url);
-                  resolve(frames);
-                }
-              } else {
-                URL.revokeObjectURL(url);
-                reject(new Error("Failed to encode frame"));
-              }
-            },
-            "image/jpeg",
-            0.8
-          );
-        };
-
-        video.onerror = () => {
-          URL.revokeObjectURL(url);
-          reject(new Error("Video loading error"));
-        };
-      });
-    },
-    [maxResolution]
-  );
-
-  const blobToBase64 = useCallback((blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error("Failed to read frame"));
-      reader.readAsDataURL(blob);
-    });
+  const waitForConnection = useCallback(async () => {
+    const startedAt = Date.now();
+    while (!connectedRef.current) {
+      if (cancelRef.current) throw new Error("Processing cancelled.");
+      if (Date.now() - startedAt > CONNECTION_TIMEOUT_MS) {
+        throw new Error(`WebSocket connection timed out after ${CONNECTION_TIMEOUT_MS / 1000} seconds. Check the backend and NEXT_PUBLIC_WS_URL.`);
+      }
+      await sleep(100);
+    }
   }, []);
 
-  const processVideo = useCallback(
-    async (videoFile: File): Promise<DetectionResult[]> => {
-      if (isProcessing) return [];
+  const captureFrame = useCallback(async (video: HTMLVideoElement, timestamp: number): Promise<Blob> => {
+    const targetTime = Math.min(Math.max(timestamp, 0), Math.max(0, video.duration - 0.001));
+    if (Math.abs(video.currentTime - targetTime) > 0.001) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          cleanup();
+          reject(new Error(`Timed out seeking to ${targetTime.toFixed(2)} seconds.`));
+        }, 5000);
+        const cleanup = () => {
+          window.clearTimeout(timeout);
+          video.removeEventListener("seeked", onSeeked);
+          video.removeEventListener("error", onErrorEvent);
+        };
+        const onSeeked = () => { cleanup(); resolve(); };
+        const onErrorEvent = () => { cleanup(); reject(new Error("Could not seek in the selected video.")); };
+        video.addEventListener("seeked", onSeeked, { once: true });
+        video.addEventListener("error", onErrorEvent, { once: true });
+        video.currentTime = targetTime;
+      });
+    }
 
-      // Validate wsUrl is provided
-      if (!wsUrl) {
-        const errorMsg = "WebSocket URL (wsUrl) is required for video file detection";
-        setError(errorMsg);
-        onError?.(errorMsg);
-        return [];
-      }
+    const canvas = document.createElement("canvas");
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) throw new Error("The selected video has no readable video dimensions.");
+    const scale = Math.min(maxResolution / width, maxResolution / height, 1);
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create a canvas context to extract video frames.");
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not encode the video frame.")), "image/jpeg", 0.82);
+    });
+    return blob;
+  }, [maxResolution]);
 
-      cancelRef.current = false;
-      setIsProcessing(true);
-      setError(null);
-      setCurrentFrame(0);
-      setProgress(0);
-      setResults([]);
-      frameIndexRef.current = 0;
-      videoFileRef.current = videoFile;
+  const blobToBase64 = useCallback((blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = reader.result;
+      if (typeof value !== "string") return reject(new Error("Could not read the extracted frame."));
+      resolve(value); // WebSocket backend receives a data URL, as in the existing protocol.
+    };
+    reader.onerror = () => reject(new Error("Failed to read the extracted frame."));
+    reader.readAsDataURL(blob);
+  }), []);
 
-      // Create video element to get metadata
-      const video = document.createElement("video");
-      video.preload = "metadata";
+  const processVideo = useCallback(async (videoFile: File): Promise<DetectionResult[]> => {
+    if (processingRef.current) throw new Error("A video is already being processed.");
+    if (!wsUrl) throw new Error("WebSocket URL is required for video detection.");
+    if (typeof document === "undefined") throw new Error("Video processing is only available in the browser.");
+    if (!Number.isFinite(fps) || fps <= 0) throw new Error("FPS must be greater than zero.");
+
+    processingRef.current = true;
+    cancelRef.current = false;
+    resultsRef.current = [];
+    completedFrameIndicesRef.current = new Set();
+    setIsProcessing(true);
+    setError(null);
+    setCurrentFrame(0);
+    setTotalFrames(0);
+    setProgress(0);
+    setResults([]);
+
+    let objectUrl: string | null = null;
+    let video: HTMLVideoElement | null = null;
+
+    try {
+      objectUrl = URL.createObjectURL(videoFile);
+      video = document.createElement("video");
+      video.preload = "auto";
       video.muted = true;
-      const url = URL.createObjectURL(videoFile);
-      video.src = url;
-      videoElementRef.current = video;
+      video.playsInline = true;
+      video.src = objectUrl;
+      videoRef.current = video;
 
       await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => reject(new Error("Failed to load video"));
-        setTimeout(() => reject(new Error("Video load timeout")), 10000);
+        const timeout = window.setTimeout(() => reject(new Error("Timed out loading video metadata.")), 15_000);
+        const cleanup = () => {
+          window.clearTimeout(timeout);
+          video?.removeEventListener("loadedmetadata", onLoaded);
+          video?.removeEventListener("error", onVideoError);
+        };
+        const onLoaded = () => { cleanup(); resolve(); };
+        const onVideoError = () => { cleanup(); reject(new Error("The browser could not load this video. Try converting it to MP4 (H.264).")); };
+        video!.addEventListener("loadedmetadata", onLoaded, { once: true });
+        video!.addEventListener("error", onVideoError, { once: true });
+        if (video!.readyState >= 1) { cleanup(); resolve(); }
       });
 
-      const duration = video.duration;
-      const estimatedFPS = 30;
-      const totalFramesCount = Math.floor(duration * estimatedFPS);
-      setTotalFrames(totalFramesCount);
+      if (!video.duration || !Number.isFinite(video.duration)) throw new Error("The selected video has an invalid duration.");
+      const frameCount = Math.max(1, Math.ceil(video.duration * fps));
+      setTotalFrames(frameCount);
 
-      URL.revokeObjectURL(url);
-
-      // Start the WebSocket connection.
       startDetection(confThreshold);
+      await waitForConnection();
 
-      // Wait for the latest connection state, not the stale value captured
-      // when processVideo was first called.
-      try {
-        await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        let checkConnection: ReturnType<typeof setInterval> | undefined;
-        let connectionTimeout: ReturnType<typeof setTimeout> | undefined;
+      for (let index = 0; index < frameCount; index += 1) {
+        if (cancelRef.current) break;
+        const timestamp = Math.min(index / fps, Math.max(0, video.duration - 0.001));
+        const blob = await captureFrame(video, timestamp);
+        const base64 = await blobToBase64(blob);
 
-        const cleanup = () => {
-          if (checkConnection !== undefined) clearInterval(checkConnection);
-          if (connectionTimeout !== undefined) clearTimeout(connectionTimeout);
-        };
-
-        const finish = (callback: () => void) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          callback();
-        };
-
-        const check = () => {
-          if (cancelRef.current) {
-            finish(() => reject(new Error("Cancelled")));
-            return;
+        // Send one frame at a time. This respects the hook's single-pending-frame
+        // protocol and avoids silently skipping frames when the socket is busy.
+        const sendStartedAt = Date.now();
+        let sent = false;
+        while (!sent && !cancelRef.current) {
+          if (Date.now() - sendStartedAt > CONNECTION_TIMEOUT_MS) {
+            throw new Error(`Could not send frame ${index}; the WebSocket was not ready.`);
           }
-
-          if (isConnectedRef.current) {
-            finish(resolve);
-          }
-        };
-
-        checkConnection = setInterval(check, 100);
-        connectionTimeout = setTimeout(() => {
-          finish(() => reject(
-            new Error(
-              `Connection timeout: WebSocket did not become ready within 10 seconds. URL: ${wsUrl}`
-            )
-          ));
-        }, 10000);
-
-        // Check immediately in case the socket opened before the interval ran.
-        check();
-        });
-      } catch (connectionError) {
-        const message = connectionError instanceof Error
-          ? connectionError.message
-          : "Unable to connect to the detection WebSocket.";
-
-        setError(message);
-        onError?.(message);
-        stopDetection();
-        setIsProcessing(false);
-        URL.revokeObjectURL(url);
-        return [];
-      }
-
-      if (cancelRef.current) {
-        setIsProcessing(false);
-        return [];
-      }
-
-      // Extract all frames upfront (or in batches)
-      // For memory efficiency, we'll extract in batches of 100 frames
-      const batchSize = 100;
-      const allFrames: VideoFrame[] = [];
-
-      for (let batchStart = 0; batchStart < totalFramesCount; batchStart += batchSize) {
+          sent = sendFrame(base64, index, timestamp);
+          if (!sent) await sleep(SEND_RETRY_INTERVAL_MS);
+        }
         if (cancelRef.current) break;
 
-        const framesToExtract = Math.min(batchSize, totalFramesCount - batchStart);
-        try {
-          const frames = await extractFramesFromVideo(videoFile, batchStart, framesToExtract);
-          allFrames.push(...frames);
-        } catch (err) {
-          console.error(`[useVideoFileDetection] Batch ${batchStart} extraction error:`, err);
-          if (!cancelRef.current) {
-            const errorMsg = err instanceof Error ? err.message : "Frame extraction failed";
-            setError(errorMsg);
-            onError?.(errorMsg);
+        const responseStartedAt = Date.now();
+        while (!completedFrameIndicesRef.current.has(index) && !cancelRef.current) {
+          if (Date.now() - responseStartedAt > FRAME_RESPONSE_TIMEOUT_MS) {
+            const timeoutError = new Error(`No detection result was received for frame ${index} within ${FRAME_RESPONSE_TIMEOUT_MS / 1000} seconds.`);
+            callbacksRef.current.onFrameError?.(index, timeoutError);
+            completedFrameIndicesRef.current.add(index);
+            break;
           }
-          break;
+          await sleep(50);
         }
+
+        const processedCount = index + 1;
+        setCurrentFrame(processedCount);
+        const nextProgress = processedCount / frameCount;
+        setProgress(nextProgress);
+        callbacksRef.current.onProgress?.(nextProgress);
       }
 
-      if (cancelRef.current || allFrames.length === 0) {
-        setIsProcessing(false);
-        stopDetection();
-        return [];
-      }
-
-      // Send frames at controlled FPS
-      const frameInterval = 1000 / fps; // ms between frames
-      let frameIndex = 0;
-
-      const sendNextFrame = async () => {
-        if (cancelRef.current || frameIndex >= allFrames.length) {
-          // All frames sent, wait for remaining responses
-          await new Promise<void>((resolve) => {
-            const checkDone = setInterval(() => {
-              if (framesReceived >= frameIndex || cancelRef.current) {
-                clearInterval(checkDone);
-                resolve();
-              }
-            }, 100);
-            // Max wait 30 seconds for remaining responses
-            setTimeout(() => {
-              clearInterval(checkDone);
-              resolve();
-            }, 30000);
-          });
-          return;
-        }
-
-        const frame = allFrames[frameIndex];
-        const now = performance.now();
-
-        // Throttle to target FPS
-        if (now - lastCaptureTimeRef.current < frameInterval) {
-          animationRef.current = requestAnimationFrame(sendNextFrame);
-          return;
-        }
-        lastCaptureTimeRef.current = now;
-
-        try {
-          // Convert frame to base64
-          const base64 = await blobToBase64(frame.blob);
-
-          // Send frame
-          sendFrame(base64, frame.index, frame.timestamp);
-          frameIndex++;
-          setCurrentFrame(frameIndex);
-          setProgress(frameIndex / totalFramesCount);
-          onProgress?.(frameIndex / totalFramesCount);
-        } catch (err) {
-          console.error(`[useVideoFileDetection] Frame ${frameIndex} send error:`, err);
-          frameIndex++; // Skip failed frame
-        }
-
-        // Schedule next frame
-        if (!cancelRef.current) {
-          animationRef.current = requestAnimationFrame(sendNextFrame);
-        }
-      };
-
-      // Start the sending loop
-      animationRef.current = requestAnimationFrame(sendNextFrame);
-
-      // Wait for completion (when all frames sent and received)
-      await new Promise<void>((resolve) => {
-        const checkComplete = setInterval(() => {
-          if (cancelRef.current || (frameIndex >= allFrames.length && framesReceived >= frameIndex)) {
-            clearInterval(checkComplete);
-            resolve();
-          }
-        }, 100);
-      });
-
-      stopDetection();
-      setIsProcessing(false);
-      setProgress(1);
-
+      const finalResults = [...resultsRef.current].sort((a, b) => a.frame_index - b.frame_index);
+      setResults(finalResults);
       if (!cancelRef.current) {
-        onComplete?.(results);
+        setProgress(1);
+        callbacksRef.current.onComplete?.(finalResults);
       }
-
-      return results;
-    },
-    [
-      isProcessing,
-      fps,
-      confThreshold,
-      extractFramesFromVideo,
-      blobToBase64,
-      startDetection,
-      stopDetection,
-      sendFrame,
-      isConnected,
-      framesReceived,
-      onFrameResult,
-      onFrameError,
-      onFallDetected,
-      onProgress,
-      onComplete,
-      onError,
-      results,
-    ]
-  );
+      return finalResults;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Video detection failed.";
+      if (!cancelRef.current) {
+        setError(message);
+        callbacksRef.current.onError?.(message);
+      }
+      throw err;
+    } finally {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      stopDetection(true);
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      videoRef.current = null;
+      processingRef.current = false;
+      setIsProcessing(false);
+    }
+  }, [wsUrl, fps, confThreshold, startDetection, waitForConnection, captureFrame, blobToBase64, sendFrame, stopDetection]);
 
   const cancelProcessing = useCallback(() => {
     cancelRef.current = true;
-    if (animationRef.current !== null) {
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
-    stopDetection();
+    videoRef.current?.pause();
+    stopDetection(true);
     setIsProcessing(false);
   }, [stopDetection]);
 
   const reset = useCallback(async () => {
-    cancelRef.current = true;
-    if (animationRef.current !== null) {
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-    }
-    stopDetection();
-    if (sessionId) {
-      await clearSessionCache(sessionId);
-    }
-    setIsProcessing(false);
+    cancelProcessing();
+    resultsRef.current = [];
+    completedFrameIndicesRef.current.clear();
     setCurrentFrame(0);
     setTotalFrames(0);
     setProgress(0);
     setError(null);
     setResults([]);
-    frameIndexRef.current = 0;
-  }, [stopDetection, sessionId, clearSessionCache]);
+    if (sessionId) await clearSessionCache(sessionId);
+  }, [cancelProcessing, sessionId, clearSessionCache]);
 
   const setConfThreshold = useCallback((value: number) => {
-    setConfThresholdState(value);
-    setCoreConfThreshold(value);
+    const safeValue = Math.min(1, Math.max(0, value));
+    setConfThresholdState(safeValue);
+    setCoreConfThreshold(safeValue);
   }, [setCoreConfThreshold]);
 
   return {
-    // State
     isProcessing,
     isConnected,
     currentFrame,
@@ -534,8 +348,6 @@ export function useVideoFileDetection({
     error,
     results,
     confThreshold,
-
-    // Controls
     processVideo,
     cancelProcessing,
     reset,
