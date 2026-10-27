@@ -1,101 +1,150 @@
 """
 Connection Manager for WebSocket connections.
-Handles connection pooling, limiting, and per-connection state.
+
+Handles:
+- WebSocket connection limits
+- Connection metadata
+- Connection statistics
 """
 
 import asyncio
+import os
 import time
 import uuid
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
+
 from fastapi import WebSocket
 
 
-class ConnectionManager:
-    """Manages WebSocket connections with max limit and per-connection state."""
+MAX_WEBSOCKET_CONNECTIONS = int(
+    os.getenv("MAX_ACTIVE_SESSIONS", "5")
+)
 
-    def __init__(self, max_connections: int = 10):
-        self.max_connections = max_connections
-        self.active_connections: Dict[str, WebSocket] = {}  # connection_id -> WebSocket
-        self.connection_metadata: Dict[str, Dict[str, Any]] = {}  # connection_id -> metadata
+
+class ConnectionManager:
+    """Manage WebSocket connections and their metadata."""
+
+    def __init__(self, max_connections: int = 5):
+        self.max_connections = max(1, max_connections)
+
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.connection_metadata: Dict[str, Dict[str, Any]] = {}
+
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket, connection_id: Optional[str] = None) -> tuple[bool, str]:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        connection_id: Optional[str] = None,
+    ) -> tuple[bool, str]:
         """
-        Accept a new WebSocket connection.
+        Register a WebSocket connection.
 
         Returns:
-            tuple: (success: bool, connection_id: str)
+            (success, connection_id)
         """
         async with self._lock:
             if len(self.active_connections) >= self.max_connections:
                 return False, ""
 
-            if connection_id is None:
-                connection_id = str(uuid.uuid4())[:8]
+            connection_id = connection_id or str(uuid.uuid4())[:12]
 
-            # Ensure unique connection_id
+            # Ensure the ID is unique.
             while connection_id in self.active_connections:
-                connection_id = str(uuid.uuid4())[:8]
+                connection_id = str(uuid.uuid4())[:12]
 
             self.active_connections[connection_id] = websocket
+
             self.connection_metadata[connection_id] = {
                 "connected_at": time.time(),
+                "last_activity": time.time(),
                 "conf_threshold": 0.6,
                 "frames_sent": 0,
                 "frames_received": 0,
-                "last_activity": time.time(),
             }
+
             return True, connection_id
 
-    def disconnect(self, connection_id: str) -> bool:
-        """Disconnect and remove a connection."""
-        if connection_id in self.active_connections:
-            del self.active_connections[connection_id]
-        if connection_id in self.connection_metadata:
-            del self.connection_metadata[connection_id]
-        return True
+    async def disconnect(self, connection_id: str) -> bool:
+        """Remove a connection and its metadata."""
+        async with self._lock:
+            existed = connection_id in self.active_connections
 
-    def get_connection(self, connection_id: str) -> Optional[WebSocket]:
-        """Get WebSocket by connection ID."""
+            self.active_connections.pop(connection_id, None)
+            self.connection_metadata.pop(connection_id, None)
+
+            return existed
+
+    def get_connection(
+        self,
+        connection_id: str,
+    ) -> Optional[WebSocket]:
         return self.active_connections.get(connection_id)
 
-    def update_metadata(self, connection_id: str, **kwargs) -> bool:
-        """Update connection metadata."""
-        if connection_id in self.connection_metadata:
-            self.connection_metadata[connection_id].update(kwargs)
-            self.connection_metadata[connection_id]["last_activity"] = time.time()
-            return True
-        return False
+    def update_metadata(
+        self,
+        connection_id: str,
+        **kwargs: Any,
+    ) -> bool:
+        """Update metadata for a connected client."""
+        metadata = self.connection_metadata.get(connection_id)
 
-    def get_metadata(self, connection_id: str) -> Optional[Dict[str, Any]]:
-        """Get connection metadata."""
-        return self.connection_metadata.get(connection_id)
+        if metadata is None:
+            return False
+
+        metadata.update(kwargs)
+        metadata["last_activity"] = time.time()
+
+        return True
+
+    def get_metadata(
+        self,
+        connection_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        metadata = self.connection_metadata.get(connection_id)
+
+        return dict(metadata) if metadata else None
 
     def get_all_metadata(self) -> Dict[str, Dict[str, Any]]:
-        """Get metadata for all active connections."""
-        return self.connection_metadata.copy()
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get connection statistics."""
         return {
-            "active": len(self.active_connections),
-            "max": self.max_connections,
-            "available": self.max_connections - len(self.active_connections),
-            "connections": list(self.connection_metadata.keys()),
+            connection_id: dict(metadata)
+            for connection_id, metadata in self.connection_metadata.items()
         }
 
-    async def broadcast(self, message: Dict[str, Any], exclude: Optional[str] = None) -> int:
-        """Broadcast message to all connected clients."""
+    def get_stats(self) -> Dict[str, Any]:
+        active = len(self.active_connections)
+
+        return {
+            "active": active,
+            "max": self.max_connections,
+            "available": max(0, self.max_connections - active),
+            "connections": list(self.active_connections.keys()),
+        }
+
+    async def broadcast(
+        self,
+        message: Dict[str, Any],
+        exclude: Optional[str] = None,
+    ) -> int:
+        """Broadcast a message to connected clients."""
         sent = 0
-        for conn_id, ws in self.active_connections.items():
-            if conn_id != exclude:
-                try:
-                    await ws.send_json(message)
-                    sent += 1
-                except Exception:
-                    pass
+
+        for connection_id, websocket in list(
+            self.active_connections.items()
+        ):
+            if connection_id == exclude:
+                continue
+
+            try:
+                await websocket.send_json(message)
+                sent += 1
+            except Exception:
+                # A disconnected client may still be in the snapshot.
+                await self.disconnect(connection_id)
+
         return sent
 
 
-# Global connection manager instance
-connection_manager = ConnectionManager(max_connections=10)
+connection_manager = ConnectionManager(
+    max_connections=MAX_WEBSOCKET_CONNECTIONS
+)

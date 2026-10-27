@@ -7,8 +7,9 @@ import os
 import uuid
 import asyncio
 import json
+import time
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Query
@@ -32,6 +33,82 @@ detector: Optional[FallDetector] = None
 
 # Job storage for video processing
 video_jobs: Dict[str, VideoDetectionResult] = {}
+
+# Shared capacity across all detection routes in this Python process.
+# Configure with MAX_ACTIVE_SESSIONS=5 in your deployment environment.
+MAX_ACTIVE_SESSIONS = max(1, int(os.getenv("MAX_ACTIVE_SESSIONS", "5")))
+
+
+class ActiveWorkloadLimiter:
+    """Atomically reserve up to N active detection workloads in this process."""
+
+    def __init__(self, limit: int):
+        self.limit = max(1, limit)
+        self._active: Dict[str, Dict[str, str]] = {}
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, kind: str, owner: Optional[str] = None) -> Optional[str]:
+        async with self._lock:
+            if len(self._active) >= self.limit:
+                return None
+            token = str(uuid.uuid4())
+            self._active[token] = {
+                "kind": kind,
+                "owner": owner or "",
+                "started_at": str(asyncio.get_running_loop().time()),
+            }
+            return token
+
+    async def release(self, token: Optional[str]) -> None:
+        if not token:
+            return
+        async with self._lock:
+            self._active.pop(token, None)
+
+    async def stats(self) -> Dict[str, Any]:
+        async with self._lock:
+            active = len(self._active)
+            return {
+                "active_workloads": active,
+                "max_active_workloads": self.limit,
+                "available_slots": max(0, self.limit - active),
+                "workloads": [
+                    {"kind": item["kind"], "owner": item["owner"]}
+                    for item in self._active.values()
+                ],
+            }
+
+
+workload_limiter = ActiveWorkloadLimiter(MAX_ACTIVE_SESSIONS)
+video_job_slots: Dict[str, str] = {}
+
+
+async def _disconnect_connection(connection_id: str) -> None:
+    """Support synchronous or asynchronous ConnectionManager.disconnect methods."""
+    result = connection_manager.disconnect(connection_id)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+async def _cleanup_session_connections(session_id: str) -> int:
+    """Close and remove all WebSocket connections associated with a session."""
+    connection_ids = session_manager.get_session_connections(session_id)
+    closed_count = 0
+
+    for connection_id in connection_ids:
+        websocket = connection_manager.get_connection(connection_id)
+        if websocket is not None:
+            try:
+                await websocket.close(code=1000, reason="Session ended")
+            except Exception:
+                pass
+            await _disconnect_connection(connection_id)
+            closed_count += 1
+        session_manager.unregister_connection(session_id, connection_id)
+
+    session_manager.session_connections.pop(session_id, None)
+    session_manager.sessions.pop(session_id, None)
+    return closed_count
 
 
 @asynccontextmanager
@@ -155,9 +232,16 @@ async def health_check():
     return {
         "status": "healthy",
         "model_loaded": detector is not None,
-        "active_jobs": len(video_jobs),
-        "ws_connections": connection_manager.get_stats()
+        "active_jobs": sum(1 for job in video_jobs.values() if job.status == "processing"),
+        "ws_connections": connection_manager.get_stats(),
+        "workload_capacity": await workload_limiter.stats(),
     }
+
+
+@app.get("/api/workload/stats")
+async def workload_stats():
+    """Show current shared detection capacity usage."""
+    return await workload_limiter.stats()
 
 
 @app.get("/api/ws/stats")
@@ -175,8 +259,8 @@ async def register_session(session_id: str = None):
 
 @app.post("/api/session/cleanup")
 async def cleanup_session(session_id: str):
-    """Clean up all connections for a session."""
-    closed = session_manager.cleanup_session(session_id)
+    """Clean up all connections and the session record."""
+    closed = await _cleanup_session_connections(session_id)
     return {"session_id": session_id, "connections_closed": closed, "status": "cleaned"}
 
 
@@ -192,104 +276,116 @@ async def session_stats():
 
 @app.websocket("/ws/detect")
 async def websocket_detect(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time fall detection.
-
-    Client sends: {"image": "base64_jpeg", "conf_threshold": 0.6}
-    Server responds: {"boxes": [...], "scores": [...], "falls": [...], "timestamp": 1234567890}
-
-    Query Parameters:
-    - connection_id: Optional client-provided connection ID
-    - session_id: Optional session ID for tracking
-    """
-    # Accept connection with connection manager
-    connection_id = websocket.query_params.get("connection_id")
-    session_id = websocket.query_params.get("session_id")
-    success, assigned_connection_id = await connection_manager.connect(websocket, connection_id)
-
-    if not success:
-        await websocket.close(code=1013, reason="Maximum connections reached (10)")
-        return
-
+    """Real-time fall detection using a shared workload slot."""
     await websocket.accept()
 
-    # Register with session if provided
-    if session_id:
-        session_manager.register_connection(session_id, assigned_connection_id)
+    session_id = websocket.query_params.get("session_id")
+    requested_connection_id = websocket.query_params.get("connection_id")
 
-    print(f"✓ WebSocket client connected: {assigned_connection_id} (Total: {len(connection_manager.active_connections)}/{connection_manager.max_connections})")
+    workload_token = await workload_limiter.acquire("websocket", session_id or "")
+    if workload_token is None:
+        await websocket.send_json({
+            "error": f"Maximum of {MAX_ACTIVE_SESSIONS} active detection workloads reached. Try again later.",
+            "code": "CAPACITY_LIMIT_REACHED",
+            "max_active_sessions": MAX_ACTIVE_SESSIONS,
+        })
+        await websocket.close(code=1013, reason="Detection capacity reached")
+        return
+
+    assigned_connection_id = ""
+    registered_session = False
 
     try:
-        while True:
-            # Receive frame from client
-            data = await websocket.receive_text()
-            message = json.loads(data)
+        success, assigned_connection_id = await connection_manager.connect(
+            websocket, requested_connection_id
+        )
+        if not success:
+            await websocket.send_json({
+                "error": "WebSocket connection capacity reached. Try again later.",
+                "code": "WEBSOCKET_CAPACITY_REACHED",
+            })
+            await websocket.close(code=1013, reason="WebSocket capacity reached")
+            return
 
-            # Extract image and optional config
+        if session_id:
+            registered_session = session_manager.register_connection(
+                session_id, assigned_connection_id
+            )
+
+        print(f"WebSocket connected: {assigned_connection_id}")
+
+        while True:
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": "Invalid JSON message"})
+                continue
+
             image_b64 = message.get("image")
             conf_threshold = message.get("conf_threshold")
-
             if not image_b64:
                 await websocket.send_json({"error": "Missing 'image' field"})
                 continue
 
-            # Get per-session email (if session_id provided)
-            session_email = None
-            if session_id:
-                session_email = session_manager.get_session_email(session_id)
+            session_email = session_manager.get_session_email(session_id) if session_id else None
 
-            # Decode and process frame
             try:
                 frame = decode_base64_image(image_b64)
                 if frame is None or frame.size == 0:
                     await websocket.send_json({"error": "Invalid image data"})
                     continue
 
-                # Update frames sent counter
-                connection_manager.update_metadata(assigned_connection_id, frames_sent=connection_manager.connection_metadata[assigned_connection_id]["frames_sent"] + 1)
+                metadata = connection_manager.get_metadata(assigned_connection_id) or {}
+                connection_manager.update_metadata(
+                    assigned_connection_id,
+                    frames_sent=metadata.get("frames_sent", 0) + 1,
+                )
 
-                # Run detection with per-session config (stateless per-call)
-                if detector:
-                    result = detector.detect_frame(
-                        frame,
-                        conf_threshold=conf_threshold,
-                        target_email=session_email
-                    )
-
-                    # Update frames received counter
-                    connection_manager.update_metadata(assigned_connection_id, frames_received=connection_manager.connection_metadata[assigned_connection_id]["frames_received"] + 1)
-
-                    # Update frames received counter
-                    connection_manager.update_metadata(assigned_connection_id, frames_received=connection_manager.connection_metadata[assigned_connection_id]["frames_received"] + 1)
-
-                    # Send results back
-                    await websocket.send_json({
-                        "boxes": result.boxes,
-                        "scores": result.scores,
-                        "falls": result.falls,
-                        "timestamp": result.timestamp,
-                        "connection_id": assigned_connection_id
-                    })
-                else:
+                if detector is None:
                     await websocket.send_json({"error": "Detector not initialized"})
+                    continue
 
-            except Exception as e:
-                await websocket.send_json({"error": f"Processing error: {str(e)}"})
+                result = await asyncio.to_thread(
+                    detector.detect_frame,
+                    frame,
+                    conf_threshold=conf_threshold,
+                    target_email=session_email,
+                )
+
+                metadata = connection_manager.get_metadata(assigned_connection_id) or {}
+                connection_manager.update_metadata(
+                    assigned_connection_id,
+                    frames_received=metadata.get("frames_received", 0) + 1,
+                )
+
+                await websocket.send_json({
+                    "boxes": result.boxes,
+                    "scores": result.scores,
+                    "falls": result.falls,
+                    "timestamp": result.timestamp,
+                    "connection_id": assigned_connection_id,
+                })
+            except Exception as exc:
+                try:
+                    await websocket.send_json({"error": f"Processing error: {str(exc)}"})
+                except Exception:
+                    break
 
     except WebSocketDisconnect:
-        print(f"✓ WebSocket client disconnected: {assigned_connection_id}")
-    except Exception as e:
-        print(f"WebSocket error for {assigned_connection_id}: {e}")
+        print(f"WebSocket disconnected: {assigned_connection_id or 'unassigned'}")
+    except Exception as exc:
+        print(f"WebSocket error: {exc}")
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
     finally:
-        # Clean up connection
-        if session_id:
-            session_manager.unregister_connection(session_id, assigned_connection_id)
-        connection_manager.disconnect(assigned_connection_id)
-        print(f"✓ WebSocket cleaned up: {assigned_connection_id} (Remaining: {len(connection_manager.active_connections)})")
+        if assigned_connection_id:
+            if registered_session and session_id:
+                session_manager.unregister_connection(session_id, assigned_connection_id)
+            await _disconnect_connection(assigned_connection_id)
+        await workload_limiter.release(workload_token)
 
 
 # ============================================================================
@@ -298,44 +394,44 @@ async def websocket_detect(websocket: WebSocket):
 
 @app.post("/api/detect/frame", response_model=DetectFrameResponse)
 async def detect_frame(request: DetectFrameRequest, session_id: str = Query(None)):
-    """
-    Detect falls in a single frame via REST.
-    Use WebSocket (/ws/detect) for real-time streaming.
-    """
-    if not detector:
+    """Detect one frame via REST, respecting shared detection capacity."""
+    if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
-    # Get per-session email if session_id provided
-    target_email = None
-    if session_id:
-        target_email = session_manager.get_session_email(session_id)
-    else:
-        target_email = detector.target_email
+    workload_token = await workload_limiter.acquire("frame", session_id or "")
+    if workload_token is None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Maximum of {MAX_ACTIVE_SESSIONS} active detection workloads reached. Try again later.",
+        )
 
     try:
+        target_email = session_manager.get_session_email(session_id) if session_id else detector.target_email
         frame = decode_base64_image(request.image)
         if frame is None or frame.size == 0:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
-        result = detector.detect_frame(
+        result = await asyncio.to_thread(
+            detector.detect_frame,
             frame,
             conf_threshold=request.conf_threshold,
-            target_email=target_email
+            target_email=target_email,
         )
-
-        # Optionally return annotated image
-        annotated = detector.draw_detections(frame, result)
-        annotated_b64 = encode_frame_to_base64(annotated)
+        annotated = await asyncio.to_thread(detector.draw_detections, frame, result)
 
         return DetectFrameResponse(
             boxes=result.boxes,
             scores=result.scores,
             falls=result.falls,
             timestamp=result.timestamp,
-            annotated_image=annotated_b64
+            annotated_image=encode_frame_to_base64(annotated),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Detection failed: {str(exc)}")
+    finally:
+        await workload_limiter.release(workload_token)
 
 
 # ============================================================================
@@ -346,76 +442,96 @@ async def detect_frame(request: DetectFrameRequest, session_id: str = Query(None
 async def upload_video(
     file: UploadFile = File(...),
     conf_threshold: float = Query(0.6, ge=0.0, le=1.0),
-    frame_skip: int = Query(3, ge=1, le=10, description="Process every Nth frame (higher = faster, less memory)"),
-    max_resolution: int = Query(640, ge=320, le=1280, description="Max width/height for inference"),
-    session_id: str = Query(None, description="Session ID for per-session email config")
+    frame_skip: int = Query(3, ge=1, le=10, description="Process every Nth frame"),
+    max_resolution: int = Query(640, ge=320, le=1280, description="Max inference dimension"),
+    session_id: str = Query(None, description="Session ID for per-session email config"),
 ):
-    """
-    Upload video for fall detection processing.
-    Returns job_id for polling status.
-    """
-    if not detector:
+    """Upload a video and reserve capacity until processing completes."""
+    if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
-    # Validate file type
-    allowed_types = ["video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska"]
+    allowed_types = {
+        "video/mp4", "video/quicktime", "video/x-msvideo",
+        "video/x-matroska", "application/octet-stream",
+    }
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Unsupported video format. Use MP4, MOV, AVI, or MKV.")
 
-    # Get per-session email if session_id provided
-    target_email = None
-    if session_id:
-        target_email = session_manager.get_session_email(session_id)
-    else:
-        target_email = detector.target_email
+    workload_token = await workload_limiter.acquire("video", session_id or "")
+    if workload_token is None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Maximum of {MAX_ACTIVE_SESSIONS} active detection workloads reached. Try again later.",
+        )
 
-    # Generate job ID
     job_id = str(uuid.uuid4())[:8]
-
-    # Save uploaded file
     upload_dir = Path(__file__).parent / "uploads"
-    upload_dir.mkdir(exist_ok=True)
-
-    input_path = upload_dir / f"{job_id}_{file.filename}"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    safe_filename = Path(file.filename or "uploaded_video.mp4").name
+    input_path = upload_dir / f"{job_id}_{safe_filename}"
     output_path = upload_dir / f"{job_id}_annotated.mp4"
 
     try:
         content = await file.read()
-        with open(input_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save upload: {str(e)}")
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded video is empty")
+        with open(input_path, "wb") as output_file:
+            output_file.write(content)
 
-    # Create job record
-    job = VideoDetectionResult(
-        job_id=job_id,
-        status="processing",
-        progress=0.0
-    )
-    video_jobs[job_id] = job
+        target_email = session_manager.get_session_email(session_id) if session_id else detector.target_email
+        video_jobs[job_id] = VideoDetectionResult(job_id=job_id, status="processing", progress=0.0)
+        video_job_slots[job_id] = workload_token
 
-    # Start background processing with memory optimization params
-    asyncio.create_task(process_video_job(job_id, str(input_path), str(output_path), conf_threshold, frame_skip, max_resolution, target_email))
+        asyncio.create_task(process_video_job(
+            job_id, str(input_path), str(output_path), conf_threshold,
+            frame_skip, max_resolution, target_email,
+        ))
+        # The background job now owns this slot.
+        workload_token = None
 
-    return VideoUploadResponse(
-        job_id=job_id,
-        status="processing",
-        message="Video uploaded. Processing started."
-    )
+        return VideoUploadResponse(
+            job_id=job_id,
+            status="processing",
+            message="Video uploaded. Processing started.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        try:
+            input_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Failed to start video processing: {str(exc)}")
+    finally:
+        # Release only if the background task did not take ownership.
+        await workload_limiter.release(workload_token)
 
 
-async def process_video_job(job_id: str, input_path: str, output_path: str, conf_threshold: float, frame_skip: int = 3, max_resolution: int = 640, target_email: Optional[str] = None):
-    """Background task to process video."""
+async def process_video_job(
+    job_id: str,
+    input_path: str,
+    output_path: str,
+    conf_threshold: float,
+    frame_skip: int = 3,
+    max_resolution: int = 640,
+    target_email: Optional[str] = None,
+):
+    """Process a video job and release its reserved slot on every exit path."""
     job = video_jobs.get(job_id)
-    if not job or not detector:
-        return
-
-    def update_progress(progress: float):
-        job.progress = progress
+    slot_token = video_job_slots.get(job_id)
 
     try:
-        # Run in thread pool to avoid blocking event loop
-        loop = asyncio.get_event_loop()
+        if job is None:
+            return
+        if detector is None:
+            job.status = "failed"
+            job.error = "Detector not initialized"
+            return
+
+        def update_progress(progress: float):
+            job.progress = progress
+
+        loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
             None,
             detector.process_video,
@@ -424,31 +540,39 @@ async def process_video_job(job_id: str, input_path: str, output_path: str, conf
             update_progress,
             frame_skip,
             max_resolution,
-            True,  # half=True for FP16 inference
+            True,
             target_email,
-            conf_threshold
+            conf_threshold,
         )
 
-        # Convert results to serializable format
         job.results = [
-            {
-                "boxes": r.boxes,
-                "scores": r.scores,
-                "falls": r.falls,
-                "timestamp": r.timestamp
-            }
-            for r in results
+            {"boxes": result.boxes, "scores": result.scores, "falls": result.falls, "timestamp": result.timestamp}
+            for result in results
         ]
         job.status = "completed"
         job.progress = 1.0
         job.output_video_path = output_path
+        print(f"Video job {job_id} completed: {len(results)} frames processed")
 
-        print(f"✓ Video job {job_id} completed: {len(results)} frames processed")
+    except Exception as exc:
+        if job is not None:
+            job.status = "failed"
+            job.error = str(exc)
+        print(f"Video job {job_id} failed: {exc}")
 
-    except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        print(f"✗ Video job {job_id} failed: {e}")
+    finally:
+        await workload_limiter.release(slot_token)
+        video_job_slots.pop(job_id, None)
+        current_job = video_jobs.get(job_id)
+        if current_job is None or current_job.status != "completed":
+            try:
+                Path(output_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            Path(input_path).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 @app.get("/api/detect/video/{job_id}", response_model=VideoStatusResponse)
@@ -497,77 +621,58 @@ async def download_processed_video(job_id: str):
 # Configuration
 # ============================================================================
 
-@app.get("/api/config")
-async def get_config():
-    """Get current detector configuration."""
-    if not detector:
-        raise HTTPException(status_code=503, detail="Detector not initialized")
-
-    return {
-        "conf_threshold": detector.conf_threshold,
-        "target_email": detector.target_email,
-        "model_path": detector.model_path
-    }
-
-
 # ============================================================================
 # REST: Chunk Detection (for chunked video processing)
 # ============================================================================
 
 @app.post("/api/detect/chunk", response_model=ChunkFrameResponse)
 async def detect_chunk(request: ChunkFrameRequest, session_id: str = Query(None)):
-    """
-    Detect falls in multiple frames (chunk) via REST.
-    Used for chunked video processing - client sends 10 frames at a time.
-    """
-    if not detector:
+    """Detect a chunk of frames while respecting shared workload capacity."""
+    if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
 
-    # Get per-session email if session_id provided
-    target_email = None
-    if session_id:
-        target_email = session_manager.get_session_email(session_id)
-    else:
-        target_email = detector.target_email
+    workload_token = await workload_limiter.acquire("chunk", session_id or "")
+    if workload_token is None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Maximum of {MAX_ACTIVE_SESSIONS} active detection workloads reached. Try again later.",
+        )
 
-    import time
     start_time = time.time()
-
     try:
+        target_email = session_manager.get_session_email(session_id) if session_id else detector.target_email
         results = []
-        for i, image_b64 in enumerate(request.images):
+        for index, image_b64 in enumerate(request.images):
             frame = decode_base64_image(image_b64)
+            timestamp = request.timestamps[index] if index < len(request.timestamps) else time.time()
             if frame is None or frame.size == 0:
-                results.append({
-                    "boxes": [],
-                    "scores": [],
-                    "falls": [],
-                    "timestamp": request.timestamps[i] if i < len(request.timestamps) else time.time()
-                })
+                results.append({"boxes": [], "scores": [], "falls": [], "timestamp": timestamp})
                 continue
 
-            result = detector.detect_frame(
+            result = await asyncio.to_thread(
+                detector.detect_frame,
                 frame,
                 conf_threshold=request.conf_threshold,
-                target_email=target_email
+                target_email=target_email,
             )
-
             results.append({
                 "boxes": result.boxes,
                 "scores": result.scores,
                 "falls": result.falls,
-                "timestamp": result.timestamp
+                "timestamp": result.timestamp,
             })
-
-        processing_time = time.time() - start_time
 
         return ChunkFrameResponse(
             chunk_index=request.chunk_index,
             results=results,
-            processing_time=processing_time
+            processing_time=time.time() - start_time,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chunk detection failed: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Chunk detection failed: {str(exc)}")
+    finally:
+        await workload_limiter.release(workload_token)
 
 
 @app.post("/api/config")
