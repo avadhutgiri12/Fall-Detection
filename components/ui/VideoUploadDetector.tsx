@@ -6,51 +6,220 @@ import { Card, CardContent, CardHeader, CardTitle } from "./Card";
 import { Input } from "./Input";
 import { Label } from "./Input";
 import { useToast } from "./ToastProvider";
+import { useErrorTracker } from "../hooks/useErrorTracker";
+import { useVideoChunking } from "../hooks/useVideoChunking";
+import { useVideoCache } from "../hooks/useVideoCache";
+import { ErrorChecker } from "./ErrorChecker";
 
-interface VideoJob {
-  job_id: string;
-  status: "processing" | "completed" | "failed";
+interface ChunkedJob {
+  status: "idle" | "processing" | "completed" | "failed";
   progress: number;
-  results?: Array<{
+  results: Array<{
     boxes: number[][];
     scores: number[];
     falls: boolean[];
     timestamp: number;
   }>;
   error?: string;
-  download_url?: string;
+  sessionId?: string;
+  videoName?: string;
 }
 
 export interface VideoUploadDetectorProps {
   /** REST API base URL */
   apiUrl?: string;
+  /** WebSocket URL for real-time chunk processing */
+  wsUrl?: string;
   /** Initial confidence threshold */
   initialConfThreshold?: number;
   /** Callback when processing completes */
-  onComplete?: (job: VideoJob) => void;
+  onComplete?: (job: ChunkedJob) => void;
 }
 
 export function VideoUploadDetector({
   apiUrl = typeof window !== "undefined"
     ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     : "http://localhost:8000",
+  wsUrl = typeof window !== "undefined"
+    ? process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
+    : "ws://localhost:8000",
   initialConfThreshold = 0.6,
   onComplete,
 }: VideoUploadDetectorProps) {
-  const [job, setJob] = useState<VideoJob | null>(null);
+  // Generate session ID on mount (shared with WebcamDetector)
+  const [sessionId] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("fall_detection_session_id");
+      if (stored) return stored;
+      const newId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      sessionStorage.setItem("fall_detection_session_id", newId);
+      return newId;
+    }
+    return `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  });
+
+  const [job, setJob] = useState<ChunkedJob>({
+    status: "idle",
+    progress: 0,
+    results: [],
+  });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [confThreshold, setConfThreshold] = useState(initialConfThreshold);
-  const [frameSkip, setFrameSkip] = useState(3); // Default to 3 for free tier memory optimization
-  const [maxResolution, setMaxResolution] = useState(640); // Default to 640 for free tier
+  const [chunkSize, setChunkSize] = useState(10); // Frames per chunk
+  const [totalChunks, setTotalChunks] = useState(24); // Max chunks
+  const [maxResolution, setMaxResolution] = useState(640);
   const [error, setError] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
   const [email, setEmail] = useState("");
   const [isEmailConfigured, setIsEmailConfigured] = useState(false);
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Toast notifications
   const { toast } = useToast();
+
+  // Register session with backend on mount
+  useEffect(() => {
+    let cancelled = false;
+    const registerSession = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/session/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+        if (!response.ok && !cancelled) {
+          console.warn('[VideoUploadDetector] Failed to register session:', await response.text());
+        }
+      } catch (err) {
+        if (!cancelled) console.warn('[VideoUploadDetector] Session registration error:', err);
+      }
+    };
+    void registerSession();
+    return () => { cancelled = true; };
+  }, [apiUrl, sessionId]);
+
+  // Cleanup session on unmount (page refresh/close)
+  useEffect(() => {
+    return () => {
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify({ session_id: sessionId })], { type: 'application/json' });
+        navigator.sendBeacon(`${apiUrl}/api/session/cleanup`, blob);
+      }
+      sessionStorage.removeItem("fall_detection_session_id");
+    };
+  }, [apiUrl, sessionId]);
+
+  // Error tracker
+  const {
+    errors,
+    trackError,
+    trackInfo,
+    clearErrors: clearErrorTracker,
+    resolveError,
+    copyError,
+    exportErrors
+  } = useErrorTracker();
+
+  // Track upload errors
+  useEffect(() => {
+    if (error) {
+      trackError('video-upload', 'error', error);
+    }
+  }, [error, trackError]);
+
+  // Track job status changes
+  useEffect(() => {
+    if (job.status === "failed" && job.error) {
+      trackError('backend', 'error', `Video processing failed: ${job.error}`, { sessionId: job.sessionId });
+    } else if (job.status === "completed") {
+      trackInfo('video-upload', `Video processing completed: ${job.sessionId}`, {
+        sessionId: job.sessionId,
+        framesProcessed: job.results?.length
+      });
+    }
+  }, [job, trackError, trackInfo]);
+
+  // Initialize hooks
+  const { isReady: cacheReady, clearSessionCache, saveSession, getAllSessions, updateSession } = useVideoCache();
+
+  // Track notified fall frames to avoid duplicate toasts
+  const notifiedFallFramesRef = useRef<Set<number>>(new Set());
+
+  const {
+    isProcessing,
+    currentChunk,
+    totalChunks: processedTotalChunks,
+    processedChunks,
+    error: chunkingError,
+    processVideo,
+    cancelProcessing,
+    reset: resetChunking
+  } = useVideoChunking({
+    chunkSize,
+    totalChunks,
+    confThreshold,
+    maxResolution,
+    wsUrl: `${wsUrl}/ws/detect?session_id=${sessionId}`,
+    apiUrl,
+    onChunkComplete: (result) => {
+      // Aggregate results
+      const newResults = result.results;
+      setJob(prev => ({
+        ...prev,
+        results: [...prev.results, ...newResults],
+        progress: result.chunkIndex / processedTotalChunks,
+      }));
+
+      // Check for fall detections and show toasts
+      newResults.forEach((frameResult) => {
+        const fallIndices = frameResult.falls
+          .map((fall, idx) => (fall ? idx : -1))
+          .filter((idx) => idx !== -1);
+
+        fallIndices.forEach((fallIdx) => {
+          const frameIndex = frameResult.timestamp; // Using timestamp as unique identifier
+          const frameKey = Math.round(frameIndex * 1000); // Convert to milliseconds for uniqueness
+
+          // Avoid duplicate toasts for the same frame
+          if (notifiedFallFramesRef.current.has(frameKey)) return;
+          notifiedFallFramesRef.current.add(frameKey);
+
+          const confidence = frameResult.scores[fallIdx] || 0;
+          const timestamp = new Date(frameResult.timestamp * 1000).toLocaleTimeString();
+
+          // Toast for fall detected
+          toast({
+            type: 'warning',
+            title: '⚠ Fall Detected',
+            message: `Fall detected at ${timestamp} (${(confidence * 100).toFixed(0)}% confidence)`,
+            duration: 5000,
+          });
+
+          // Toast for email sent (assuming backend sends email on fall detection)
+          if (isEmailConfigured) {
+            toast({
+              type: 'info',
+              title: '📧 Email Alert Sent',
+              message: `Fall alert sent to configured email address`,
+              duration: 4000,
+            });
+          }
+        });
+      });
+    },
+    onProgress: (progress) => {
+      setJob(prev => ({ ...prev, progress }));
+    },
+    onError: (err, chunkIndex) => {
+      trackError('video-upload', 'error', `Chunk ${chunkIndex} failed: ${err}`, { chunkIndex });
+    },
+  });
+
+  // Sync chunking error to local error state
+  useEffect(() => {
+    if (chunkingError) {
+      setError(chunkingError);
+    }
+  }, [chunkingError]);
 
   // Update target email on backend
   const updateTargetEmail = useCallback(async (targetEmail: string) => {
@@ -74,53 +243,6 @@ export function VideoUploadDetector({
     }
   }, [apiUrl, toast]);
 
-  // Poll for job status
-  const pollJobStatus = useCallback(async (jobId: string) => {
-    try {
-      const res = await fetch(`${apiUrl}/api/detect/video/${jobId}`);
-      if (!res.ok) throw new Error("Failed to fetch status");
-      const data: VideoJob = await res.json();
-      setJob(data);
-
-      if (data.status === "completed" || data.status === "failed") {
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-        if (onComplete) onComplete(data);
-      }
-    } catch (err) {
-      console.error("[VideoUploadDetector] Poll error:", err);
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-      setError("Failed to check processing status.");
-    }
-  }, [apiUrl, onComplete]);
-
-  // Start polling
-  const startPolling = useCallback(
-    (jobId: string) => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-      pollIntervalRef.current = setInterval(() => pollJobStatus(jobId), 2000);
-      // Initial poll
-      pollJobStatus(jobId);
-    },
-    [pollJobStatus]
-  );
-
-  // Stop polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, []);
-
   // Handle file selection
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -140,11 +262,14 @@ export function VideoUploadDetector({
       }
       setSelectedFile(file);
       setError(null);
+      // Reset job state when new file selected
+      setJob({ status: "idle", progress: 0, results: [] });
+      resetChunking();
     }
-  }, []);
+  }, [resetChunking]);
 
-  // Upload video
-  const handleUpload = useCallback(async () => {
+  // Process video with chunked approach
+  const handleProcess = useCallback(async () => {
     if (!selectedFile) return;
 
     if (!isEmailConfigured) {
@@ -152,64 +277,79 @@ export function VideoUploadDetector({
       return;
     }
 
+    if (!cacheReady) {
+      setError("Cache system not ready. Please wait a moment and try again.");
+      return;
+    }
+
     setError(null);
-    setIsUploading(true);
+    setJob({
+      status: "processing",
+      progress: 0,
+      results: [],
+      sessionId,
+      videoName: selectedFile.name,
+    });
 
     try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("conf_threshold", confThreshold.toString());
-      formData.append("frame_skip", frameSkip.toString());
-      formData.append("max_resolution", maxResolution.toString());
-
-      const res = await fetch(`${apiUrl}/api/detect/video`, {
-        method: "POST",
-        body: formData,
+      // Save session to cache
+      await saveSession({
+        videoName: selectedFile.name,
+        videoSize: selectedFile.size,
+        videoType: selectedFile.type,
+        totalChunks,
+        chunkSize,
+        status: "processing",
       });
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Upload failed" }));
-        throw new Error(err.detail || "Upload failed");
+      const results = await processVideo(selectedFile);
+
+      // Flatten all results
+      const allResults = results.flatMap(r => r.results);
+
+      setJob({
+        status: "completed",
+        progress: 1,
+        results: allResults,
+        sessionId,
+        videoName: selectedFile.name,
+      });
+
+      // Update session status in cache
+      const sessions = await getAllSessions();
+      const currentSession = sessions.find((s) => s.id === sessionId);
+      if (currentSession) {
+        await updateSession({ ...currentSession, status: "completed", completedAt: Date.now() });
       }
 
-      const data: { job_id: string; status: string; message: string } = await res.json();
-      setJob({
-        job_id: data.job_id,
-        status: "processing",
-        progress: 0,
-      });
-      startPolling(data.job_id);
       setSelectedFile(null);
+      toast({ type: 'success', title: 'Processing Complete', message: `Analyzed ${allResults.length} frames` });
+      if (onComplete) onComplete(job);
     } catch (err) {
-      console.error("[VideoUploadDetector] Upload error:", err);
-      setError(err instanceof Error ? err.message : "Upload failed. Please try again.");
-    } finally {
-      setIsUploading(false);
+      console.error("[VideoUploadDetector] Processing error:", err);
+      const errorMsg = err instanceof Error ? err.message : "Processing failed. Please try again.";
+      setError(errorMsg);
+      setJob(prev => ({ ...prev, status: "failed", error: errorMsg }));
     }
-  }, [selectedFile, confThreshold, frameSkip, maxResolution, apiUrl, startPolling, isEmailConfigured, toast]);
+  }, [selectedFile, isEmailConfigured, cacheReady, processVideo, totalChunks, chunkSize, sessionId, apiUrl, toast, onComplete, job]);
 
-  // Download processed video
-  const handleDownload = useCallback(() => {
-    if (job?.download_url) {
-      const a = document.createElement("a");
-      a.href = `${apiUrl}${job.download_url}`;
-      a.download = `fall_detection_${job.job_id}_annotated.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-  }, [job, apiUrl]);
+  // Cancel processing
+  const handleCancel = useCallback(() => {
+    cancelProcessing();
+    setJob({ status: "idle", progress: 0, results: [] });
+  }, [cancelProcessing]);
 
   // Reset to initial state
-  const handleReset = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+  const handleReset = useCallback(async () => {
+    cancelProcessing();
+    resetChunking();
+    if (job.sessionId) {
+      await clearSessionCache(job.sessionId);
     }
-    setJob(null);
+    setJob({ status: "idle", progress: 0, results: [] });
     setSelectedFile(null);
     setError(null);
-  }, []);
+  }, [cancelProcessing, resetChunking, job.sessionId, clearSessionCache]);
 
   // Format file size
   const formatSize = (bytes: number) => {
@@ -222,19 +362,28 @@ export function VideoUploadDetector({
     return new Date(timestamp * 1000).toLocaleTimeString();
   };
 
+  const hasFall = job.results?.some((r) => r.falls.some((f) => f)) ?? false;
+  const fallCount = job.results?.filter((r) => r.falls.some((f) => f)).length ?? 0;
+  const maxConfidence = job.results?.length > 0
+    ? (Math.max(...job.results.flatMap((r) => r.scores)) * 100).toFixed(1) + "%"
+    : "N/A";
+  const fallRate = job.results?.length > 0
+    ? (fallCount / job.results.length * 100).toFixed(1) + "%"
+    : "0%";
+
   return (
     <Card className="w-full max-w-4xl mx-auto">
       <CardHeader className="pb-4">
         <CardTitle className="text-2xl">Video Upload & Analysis</CardTitle>
         <p className="text-muted-foreground mt-1">
-          Upload a video file to analyze for fall detection. The AI will process each frame
-          and generate an annotated video with detection boxes.
+          Upload a video file to analyze for fall detection. The AI processes frames in chunks
+          and generates detection results in real-time.
         </p>
       </CardHeader>
 
       <CardContent className="space-y-6">
         {/* Upload Zone */}
-        {!job && (
+        {job.status === "idle" && (
           <div
             className={`border-2 border-dashed rounded-2xl p-12 text-center transition-colors ${
               selectedFile
@@ -260,12 +409,12 @@ export function VideoUploadDetector({
               accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska"
               onChange={handleFileChange}
               className="hidden"
-              disabled={isUploading}
+              disabled={isProcessing}
             />
             <label
               htmlFor="video-upload"
               className="cursor-pointer"
-              style={{ pointerEvents: isUploading ? "none" : "auto" }}
+              style={{ pointerEvents: isProcessing ? "none" : "auto" }}
             >
               <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-primary/10 flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" aria-hidden="true">
@@ -295,8 +444,8 @@ export function VideoUploadDetector({
 
             {selectedFile && (
               <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-4">
-                <div className="flex items-center gap-4 p-4 bg-background rounded-xl border border-border min-w-[300px]">
-                  <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <div className="flex items-center gap-4 p-4 bg-background rounded-xl border border-border min-w-75">
+                  <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" aria-hidden="true">
                       <rect x="2" y="2" width="20" height="20" rx="2" />
                       <path d="M8 12l4 4 8-8" />
@@ -311,10 +460,10 @@ export function VideoUploadDetector({
                   <CanvasButton variant="ghost" size="sm" onClick={() => setSelectedFile(null)}>
                     Remove
                   </CanvasButton>
-                  <CanvasButton variant="primary" size="lg" onClick={handleUpload} disabled={isUploading || !isEmailConfigured} isLoading={isUploading}>
-                    Upload & Analyze
+                  <CanvasButton variant="primary" size="lg" onClick={handleProcess} disabled={isProcessing || !isEmailConfigured} isLoading={isProcessing}>
+                    {isProcessing ? "Processing..." : "Analyze Video"}
                   </CanvasButton>
-                  {!isEmailConfigured && !isUploading && (
+                  {!isEmailConfigured && !isProcessing && (
                     <span className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1 self-center sm:self-start">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                         <circle cx="12" cy="12" r="10" />
@@ -337,12 +486,12 @@ export function VideoUploadDetector({
         )}
 
         {/* Processing Status */}
-        {job && job.status === "processing" && (
+        {job.status === "processing" && (
           <div className="space-y-4">
             <div className="text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-full border-4 border-primary/20 border-t-primary animate-spin" aria-hidden="true" />
               <h3 className="text-lg font-semibold text-foreground mb-1">Processing Video...</h3>
-              <p className="text-muted-foreground">Analyzing frames for fall detection</p>
+              <p className="text-muted-foreground">Analyzing frames for fall detection (chunk {currentChunk + 1} of {processedTotalChunks})</p>
             </div>
 
             <div className="space-y-2">
@@ -357,23 +506,23 @@ export function VideoUploadDetector({
                 />
               </div>
               <p className="text-xs text-muted-foreground text-right">
-                Job ID: {job.job_id}
+                Session: {job.sessionId} • Chunks: {processedChunks}/{processedTotalChunks}
               </p>
             </div>
 
-            <CanvasButton variant="ghost" size="md" onClick={handleReset}>
+            <CanvasButton variant="ghost" size="md" onClick={handleCancel}>
               Cancel
             </CanvasButton>
           </div>
         )}
 
         {/* Results */}
-        {job && (job.status === "completed" || job.status === "failed") && (
+        {(job.status === "completed" || job.status === "failed") && (
           <div className="space-y-4">
             {job.status === "completed" ? (
               <>
                 <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
-                  <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center shrink-0">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-600" aria-hidden="true">
                       <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                       <polyline points="22 4 12 14.01 9 11.01" />
@@ -381,7 +530,7 @@ export function VideoUploadDetector({
                   </div>
                   <div>
                     <h3 className="font-semibold text-green-800">Processing Complete</h3>
-                    <p className="text-green-700 text-sm">Your annotated video is ready for download.</p>
+                    <p className="text-green-700 text-sm">Analyzed {job.results.length} frames in {processedTotalChunks} chunks.</p>
                   </div>
                 </div>
 
@@ -397,30 +546,26 @@ export function VideoUploadDetector({
                       </div>
                       <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
                         <div className="text-2xl font-bold text-red-400">
-                          {job.results.filter((r) => r.falls.some((f) => f)).length}
+                          {fallCount}
                         </div>
                         <div className="text-sm text-gray-300">Frames with Falls</div>
                       </div>
                       <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
                         <div className="text-2xl font-bold">
-                          {job.results.length > 0
-                            ? (Math.max(...job.results.flatMap((r) => r.scores)) * 100).toFixed(1) + "%"
-                            : "N/A"}
+                          {maxConfidence}
                         </div>
                         <div className="text-sm text-gray-300">Max Confidence</div>
                       </div>
                       <div className="p-4 bg-gray-900 dark:bg-gray-900 rounded-xl text-white">
                         <div className="text-2xl font-bold">
-                          {job.results.length > 0
-                            ? (job.results.filter((r) => r.falls.some((f) => f)).length / job.results.length * 100).toFixed(1) + "%"
-                            : "0%"}
+                          {fallRate}
                         </div>
                         <div className="text-sm text-gray-300">Fall Rate</div>
                       </div>
                     </div>
 
                     {/* Fall Timeline */}
-                    {job.results.some((r) => r.falls.some((f) => f)) && (
+                    {hasFall && (
                       <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl">
                         <h5 className="font-medium text-red-800 mb-3 flex items-center gap-2">
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -444,9 +589,9 @@ export function VideoUploadDetector({
                                 </span>
                               </div>
                             ))}
-                          {job.results.filter((r) => r.falls.some((f) => f)).length > 20 && (
+                          {fallCount > 20 && (
                             <p className="text-xs text-red-600 text-center">
-                              ... and {job.results.filter((r) => r.falls.some((f) => f)).length - 20} more fall events
+                              ... and {fallCount - 20} more fall events
                             </p>
                           )}
                         </div>
@@ -456,15 +601,12 @@ export function VideoUploadDetector({
                 )}
 
                 <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-border">
-                  <CanvasButton variant="primary" size="lg" onClick={handleDownload} className="w-full sm:w-auto">
+                  <CanvasButton variant="primary" size="lg" onClick={handleReset} className="w-full sm:w-auto">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mr-2" aria-hidden="true">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                       <polyline points="7 10 12 15 17 10" />
                       <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
-                    Download Annotated Video
-                  </CanvasButton>
-                  <CanvasButton variant="ghost" size="lg" onClick={handleReset} className="w-full sm:w-auto">
                     Analyze Another Video
                   </CanvasButton>
                 </div>
@@ -472,7 +614,7 @@ export function VideoUploadDetector({
             ) : (
               <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-600" aria-hidden="true">
                       <circle cx="12" cy="12" r="10" />
                       <line x1="15" y1="9" x2="9" y2="15" />
@@ -548,21 +690,39 @@ export function VideoUploadDetector({
               </p>
             </div>
             <div>
-              <Label htmlFor="video-frame-skip" className="block text-sm font-medium mb-2">
-                Frame Skip: {frameSkip} (process every {frameSkip} frame)
+              <Label htmlFor="video-chunk-size" className="block text-sm font-medium mb-2">
+                Frames per Chunk: {chunkSize}
               </Label>
               <Input
-                id="video-frame-skip"
+                id="video-chunk-size"
                 type="range"
-                min="1"
-                max="10"
+                min="5"
+                max="20"
                 step="1"
-                value={frameSkip}
-                onChange={(e) => setFrameSkip(parseInt(e.target.value))}
+                value={chunkSize}
+                onChange={(e) => setChunkSize(parseInt(e.target.value))}
                 className="w-full"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Higher = faster processing, less memory, lower temporal resolution. Default 3 for free tier.
+                Number of frames sent per batch. Lower = more frequent updates, higher overhead.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="video-total-chunks" className="block text-sm font-medium mb-2">
+                Max Chunks: {totalChunks}
+              </Label>
+              <Input
+                id="video-total-chunks"
+                type="range"
+                min="12"
+                max="48"
+                step="4"
+                value={totalChunks}
+                onChange={(e) => setTotalChunks(parseInt(e.target.value))}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Maximum number of chunks to process. 24 chunks × 10 frames = 240 frames max.
               </p>
             </div>
             <div>
@@ -580,13 +740,36 @@ export function VideoUploadDetector({
                 className="w-full"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Frames resized to this max dimension before inference. Lower = less memory, faster. Default 640 for free tier.
+                Frames resized to this max dimension before inference. Lower = less memory, faster.
               </p>
             </div>
             <div className="text-sm text-muted-foreground">
               <p>Backend: FastAPI + YOLOv8n-pose</p>
-              <p>Processing: Server-side (frames sent to backend)</p>
+              <p>Processing: Client-side chunking with server-side detection</p>
             </div>
+          </div>
+        </details>
+
+        {/* Error Checker Panel */}
+        <details className="group border-t border-border pt-6">
+          <summary className="flex items-center justify-between cursor-pointer list-none">
+            <span className="font-medium text-foreground">Error Debugger</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </summary>
+          <div className="mt-4">
+            <ErrorChecker
+              errors={errors}
+              onClear={clearErrorTracker}
+              onResolve={resolveError}
+              onCopy={copyError}
+              onExport={exportErrors}
+              maxHeight="300px"
+              title="Video Upload Errors"
+              showFilter={true}
+              showExport={true}
+            />
           </div>
         </details>
       </CardContent>

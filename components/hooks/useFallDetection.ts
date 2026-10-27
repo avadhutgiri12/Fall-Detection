@@ -52,6 +52,9 @@ export function useFallDetection({
   const mountedRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // New refs for connection lifecycle management
+  const intentionalCloseRef = useRef(false);
+  const wsReadyRef = useRef(false);
 
   // React state for UI updates
   const [isDetecting, setIsDetecting] = useState(false);
@@ -87,6 +90,9 @@ export function useFallDetection({
         ws.close();
       }
     }
+
+    // Reset wsReadyRef when closing
+    wsReadyRef.current = false;
 
     if (mountedRef.current) {
       setIsConnected(false);
@@ -125,6 +131,8 @@ export function useFallDetection({
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
       console.info("[useFallDetection] WebSocket connected:", wsUrl);
+      // Mark WS as ready for frame sending
+      wsReadyRef.current = true;
       if (mountedRef.current) {
         setIsConnected(true);
         setWsStatus("OPEN");
@@ -179,16 +187,18 @@ export function useFallDetection({
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       wsRef.current = null;
+      // Reset wsReadyRef on close
+      wsReadyRef.current = false;
       if (mountedRef.current) {
         setIsConnected(false);
         setWsStatus("CLOSED");
       }
       console.warn("[useFallDetection] WebSocket closed:", event.code, event.reason || "no reason provided");
 
-      // Reconnect while detection is active. The frame loop continues while connecting.
-      if (isDetectingRef.current) {
+      // Only reconnect if detection is still active AND this wasn't an intentional close
+      if (isDetectingRef.current && !intentionalCloseRef.current) {
         reconnectTimeoutRef.current = setTimeout(() => {
-          if (isDetectingRef.current) connectWebSocketRef.current();
+          if (isDetectingRef.current && !intentionalCloseRef.current) connectWebSocketRef.current();
         }, 1000);
       }
     };
@@ -217,8 +227,14 @@ export function useFallDetection({
       canvas.height = currentVideo.videoHeight;
     }
 
+    // Check if WebSocket is ready before attempting to send frames
+    if (!wsReadyRef.current) return;
+
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      wsReadyRef.current = false;
+      return;
+    }
 
     // Limit traffic to about 10 frames/second and allow only one async encode/send at a time.
     const now = performance.now();
@@ -299,6 +315,10 @@ export function useFallDetection({
     framePendingRef.current = false;
     lastCaptureTimeRef.current = 0;
 
+    // Reset connection lifecycle flags
+    intentionalCloseRef.current = false;
+    wsReadyRef.current = false;
+
     // Update confThreshold if provided
     if (confThreshold !== undefined) {
       setConfThresholdState(confThreshold);
@@ -327,6 +347,8 @@ export function useFallDetection({
   const stopDetection = useCallback(() => {
     // Flip the ref first so no pending callback schedules another frame.
     isDetectingRef.current = false;
+    // Mark as intentional close to prevent reconnection
+    intentionalCloseRef.current = true;
 
     if (animationRef.current !== null) {
       cancelAnimationFrame(animationRef.current);
