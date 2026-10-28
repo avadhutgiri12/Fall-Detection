@@ -13,6 +13,17 @@ services:
         value: "yolov8n-pose.pt"
       - key: CONF_THRESHOLD
         value: "0.6"
+      # Memory tuning for the 512 MB free instance
+      - key: TORCH_NUM_THREADS
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      - key: VIDEO_JOB_TTL_SECONDS
+        value: "1800"
       - key: TARGET_EMAIL
         sync: false
       - key: SMTP_SERVER

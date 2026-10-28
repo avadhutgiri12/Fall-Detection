@@ -1,4 +1,9 @@
 # Core dependencies
+# CPU-only PyTorch: the default wheel bundles ~2.5 GB of CUDA libraries that
+# Render's free instance can't use, which bloats the build and RAM usage.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1+cpu
+torchvision==0.19.1+cpu
 ultralytics==8.3.0
 opencv-python==4.10.0.84
 numpy==1.26.4
