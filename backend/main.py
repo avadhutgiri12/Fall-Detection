@@ -37,6 +37,33 @@ email_alert_service: Optional[EmailAlertService] = None
 
 # Job storage for video processing
 video_jobs: Dict[str, VideoDetectionResult] = {}
+video_job_created: Dict[str, float] = {}
+
+# Finished jobs (and their annotated videos) are dropped after this many seconds,
+# so results and files don't pile up for the life of the process.
+VIDEO_JOB_TTL_SECONDS = int(os.getenv("VIDEO_JOB_TTL_SECONDS", "1800"))
+# Uploads are streamed to disk instead of read into RAM, and capped in size.
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _purge_expired_video_jobs() -> None:
+    """Remove finished video jobs older than the TTL and delete their files."""
+    now = time.time()
+    for job_id in list(video_jobs.keys()):
+        job = video_jobs.get(job_id)
+        created = video_job_created.get(job_id, now)
+        if job is None or job.status == "processing":
+            continue
+        if now - created < VIDEO_JOB_TTL_SECONDS:
+            continue
+        if job.output_video_path:
+            try:
+                Path(job.output_video_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        video_jobs.pop(job_id, None)
+        video_job_created.pop(job_id, None)
 
 # Shared capacity across all detection routes in this Python process.
 # Configure with MAX_ACTIVE_SESSIONS=5 in your deployment environment.
@@ -128,6 +155,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize detector with email alert service
     detector = FallDetector(model_path=model_path, email_alert_service=email_alert_service)
+    detector.warmup()
     print(f"✓ FallDetector initialized with model: {model_path}")
     yield
     print("✓ Application shutdown")
@@ -529,6 +557,8 @@ async def upload_video(
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Unsupported video format. Use MP4, MOV, AVI, or MKV.")
 
+    _purge_expired_video_jobs()
+
     workload_token = await workload_limiter.acquire("video", session_id or "")
     if workload_token is None:
         raise HTTPException(
@@ -544,14 +574,27 @@ async def upload_video(
     output_path = upload_dir / f"{job_id}_annotated.mp4"
 
     try:
-        content = await file.read()
-        if not content:
-            raise HTTPException(status_code=400, detail="Uploaded video is empty")
+        # Stream to disk in 1 MB chunks rather than loading the whole video into RAM.
+        max_bytes = MAX_UPLOAD_MB * 1024 * 1024
+        written = 0
         with open(input_path, "wb") as output_file:
-            output_file.write(content)
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Video is larger than {MAX_UPLOAD_MB} MB.",
+                    )
+                output_file.write(chunk)
+        if written == 0:
+            raise HTTPException(status_code=400, detail="Uploaded video is empty")
 
         target_email = session_manager.get_session_email(session_id) if session_id else None
         video_jobs[job_id] = VideoDetectionResult(job_id=job_id, status="processing", progress=0.0)
+        video_job_created[job_id] = time.time()
         video_job_slots[job_id] = workload_token
 
         asyncio.create_task(process_video_job(
@@ -567,6 +610,10 @@ async def upload_video(
             message="Video uploaded. Processing started.",
         )
     except HTTPException:
+        try:
+            input_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         raise
     except Exception as exc:
         try:
@@ -653,6 +700,7 @@ async def process_video_job(
 @app.get("/api/detect/video/{job_id}", response_model=VideoStatusResponse)
 async def get_video_status(job_id: str):
     """Get video processing status and results."""
+    _purge_expired_video_jobs()
     job = video_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

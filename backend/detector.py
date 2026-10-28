@@ -12,10 +12,15 @@ from ultralytics import YOLO
 from dataclasses import dataclass
 from typing import List, Optional
 import threading
+import torch
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Keep PyTorch's CPU thread pool small. Each thread allocates its own
+# scratch buffers, which adds up fast on a 512 MB instance.
+torch.set_num_threads(max(1, int(os.getenv("TORCH_NUM_THREADS", "1"))))
 
 # Import email alert service
 from email_alert_service import EmailAlertService, EmailConfig, EmailAlertResult
@@ -57,13 +62,24 @@ class FallDetector:
         self.conf_threshold = conf_threshold if conf_threshold is not None else float(os.getenv("CONF_THRESHOLD", "0.6"))
         self._model: Optional[YOLO] = None
         self.email_alert_service = email_alert_service
+        # One inference at a time: concurrent calls from the WebSocket, chunk and
+        # video routes each allocate their own activation memory (and YOLO isn't
+        # thread-safe), which is what pushed the instance past its memory limit.
+        self._model_lock = threading.Lock()
+        self._load_lock = threading.Lock()
 
     @property
     def model(self) -> YOLO:
         """Lazy-load YOLO model."""
         if self._model is None:
-            self._model = YOLO(self.model_path)
+            with self._load_lock:
+                if self._model is None:
+                    self._model = YOLO(self.model_path)
         return self._model
+
+    def warmup(self) -> None:
+        """Load the model once at startup so memory use is predictable."""
+        _ = self.model
 
     def set_conf_threshold(self, threshold: float):
         """Update confidence threshold."""
@@ -97,7 +113,10 @@ class FallDetector:
         # Use provided threshold or fall back to instance default
         threshold = conf_threshold if conf_threshold is not None else self.conf_threshold
 
-        results = self.model(frame, verbose=False, half=half)
+        # FP16 is only supported on GPU; on CPU it does nothing useful.
+        use_half = half and torch.cuda.is_available()
+        with self._model_lock, torch.inference_mode():
+            results = self.model(frame, verbose=False, half=use_half)
 
         boxes = []
         scores = []
